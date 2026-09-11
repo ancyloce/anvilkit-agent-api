@@ -278,6 +278,9 @@ func (s *Server) logControlCall(
 		slog.Int64("durationMs", logging.DurationMs(elapsed)),
 		slog.String("rpc.code", rpcCode),
 	}
+	if operationID := operationIDFrom(ctx); operationID != "" {
+		attributes = append(attributes, slog.String("operationId", operationID))
+	}
 	severity := slog.LevelInfo
 	if fault != nil {
 		severity = slog.LevelWarn

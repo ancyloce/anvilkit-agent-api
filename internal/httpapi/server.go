@@ -128,6 +128,12 @@ func (s *Server) PublicHandler() http.Handler {
 	if s.servesLocalChecks {
 		mux.HandleFunc("POST "+routeLocalChecks, s.handleSubmitLocalCheck)
 		mux.HandleFunc(routeLocalChecks, s.handleUndeclaredOperation)
+		for _, route := range []string{routeOperationHold, routeOperationResume} {
+			mux.HandleFunc("POST "+route, s.handleUnsupportedLocalControlCommand)
+			mux.HandleFunc(route, s.handleUndeclaredOperation)
+		}
+		mux.HandleFunc("POST "+routeDefinitionChanges, s.handleUnsupportedLocalControlCommand)
+		mux.HandleFunc("GET "+routeDefinitionChanges, s.handleUndeclaredOperation)
 	}
 	mux.HandleFunc("/", s.handleUndeclaredOperation)
 	return s.withRequestBoundary(mux)

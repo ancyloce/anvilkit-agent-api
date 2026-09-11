@@ -512,10 +512,9 @@ func TestCancelReportsOnlyWhatControlEstablished(t *testing.T) {
 	}
 }
 
-// TestUnsupportedLocalControlCommandsAreAbsent proves that hold, resume and
-// definition changes are not served by this stage at all, which is the approved
-// precondition behaviour for the fixed local profile.
-func TestUnsupportedLocalControlCommandsAreAbsent(t *testing.T) {
+// TestUnsupportedLocalControlCommandsFailPrecondition proves that hold, resume
+// and definition changes return the fixed local profile's precondition error.
+func TestUnsupportedLocalControlCommandsFailPrecondition(t *testing.T) {
 	for _, path := range []string{
 		"/v1/operations/" + localOperation + "/hold",
 		"/v1/operations/" + localOperation + "/resume",
@@ -525,7 +524,7 @@ func TestUnsupportedLocalControlCommandsAreAbsent(t *testing.T) {
 			h := newCommandHarness(t, acceptingCommander(), true)
 			recorder := h.post(t, path, `{"commandId":"c-1","expectedOperationRevision":"3"}`,
 				bearer(localToken), "application/json")
-			requireEnvelope(t, recorder, http.StatusNotFound, codeNotFound)
+			requireEnvelope(t, recorder, http.StatusConflict, codeChangeBlocked)
 		})
 	}
 }

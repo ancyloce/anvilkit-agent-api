@@ -59,15 +59,6 @@ func (s *Server) serveEventStream(
 		s.logSubscription(r, logging.EventSSEClosed, operationID, cursor, position, closeReason, "")
 	}()
 
-	// A cursor below the retention floor cannot be served without skipping a
-	// sequence, which is never allowed, so the client is sent to the snapshot
-	// handshake instead.
-	if first.SnapshotRequired(storedEventSequence(cursor)) {
-		_ = stream.writeSnapshotRequired(operationID, first.CoveredSeq)
-		closeReason = closeReasonRetentionRestart
-		return
-	}
-
 	page := first
 	for {
 		if !grant.usableAt(time.Now()) {
@@ -78,6 +69,13 @@ func (s *Server) serveEventStream(
 			}
 			grant = renewed
 			stream.authorizationDeadline = grant.freshUntil.Add(-config.ClockMaxInterServiceError)
+		}
+		// Retention can advance between pages. Check the current position
+		// before writing any page so replay never skips a sequence.
+		if page.SnapshotRequired(storedEventSequence(position)) {
+			_ = stream.writeSnapshotRequired(operationID, page.CoveredSeq)
+			closeReason = closeReasonRetentionRestart
+			return
 		}
 		writeErr := stream.writeEvents(operationID, page.Events, &position)
 		if writeErr != nil {

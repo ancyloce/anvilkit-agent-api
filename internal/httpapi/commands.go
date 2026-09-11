@@ -24,6 +24,9 @@ import (
 const (
 	routeLocalChecks       = "/v1/local-checks"
 	routeOperationCancel   = "/v1/operations/{operationId}/cancel"
+	routeOperationHold     = "/v1/operations/{operationId}/hold"
+	routeOperationResume   = "/v1/operations/{operationId}/resume"
+	routeDefinitionChanges = "/v1/operations/definition-changes"
 	actionLocalCheckCreate = "local-check.create"
 	actionOperationCancel  = "operation.cancel"
 )
@@ -132,8 +135,6 @@ func (s *Server) handleSubmitLocalCheck(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, r, fault)
 		return
 	}
-	recordOperation(r.Context(), accepted.OperationID)
-
 	// A replay of an already accepted command is not a second acceptance, so it
 	// answers 200 with the original identity and revision rather than 202.
 	status := http.StatusAccepted
@@ -144,6 +145,15 @@ func (s *Server) handleSubmitLocalCheck(w http.ResponseWriter, r *http.Request) 
 	}
 	recordOutcome(r.Context(), status, "", "")
 	writeJSON(w, status, accepted)
+}
+
+// handleUnsupportedLocalControlCommand rejects commands excluded by the fixed
+// local profile without reading or changing any operation.
+func (s *Server) handleUnsupportedLocalControlCommand(w http.ResponseWriter, r *http.Request) {
+	if operationID := r.PathValue("operationId"); isIdentifier(operationID) {
+		recordOperation(r.Context(), operationID)
+	}
+	s.writeError(w, r, newFault(codeChangeBlocked, "the controlled local profile does not support hold, resume or definition changes"))
 }
 
 // handleCancelOperation serves POST /v1/operations/{operationId}/cancel.
@@ -300,6 +310,7 @@ func (s *Server) forwardLocalCheck(
 		return nil, fault
 	}
 
+	recordOperation(ctx, accepted.OperationID)
 	s.logControlCall(ctx, admitOperationProcedure, elapsed, "ok", "ok", nil)
 	return accepted, nil
 }
