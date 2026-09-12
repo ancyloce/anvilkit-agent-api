@@ -39,6 +39,29 @@ type OperationView struct {
 	IntendedTerminalOutcome string            `json:"intendedTerminalOutcome,omitempty"`
 	LocalCheckResult        *LocalCheckResult `json:"localCheckResult,omitempty"`
 	Reconciliation          *Reconciliation   `json:"reconciliation,omitempty"`
+	// Test billing and the preparation extension (S0-T04, 2026-09-12). The
+	// projection carries the server-bound funding authority, the bound quote
+	// reference and the preparation members; this service does not yet read
+	// the committed columns that fill them, so they stay omitted until the
+	// preparation and test-billing slices are implemented.
+	FundingAuthority     string                 `json:"fundingAuthority,omitempty"`
+	AuthorizedFundingRef string                 `json:"authorizedFundingRef,omitempty"`
+	Preparation          *PreparationProjection `json:"preparation,omitempty"`
+}
+
+// PreparationProjection is urn:anvilkit:preparation:v1#/$defs/PreparationProjection:
+// the preparation members of the view. Artifact references stay raw so the
+// committed reference bytes reach the client exactly as Control wrote them;
+// question, answer and brief text never enter the projection.
+type PreparationProjection struct {
+	Round                string          `json:"round"`
+	QuestionSetRef       json.RawMessage `json:"questionSetRef,omitempty"`
+	QuestionSetRevision  string          `json:"questionSetRevision,omitempty"`
+	QuestionSetExpiresAt string          `json:"questionSetExpiresAt,omitempty"`
+	AcceptedAnswerSetRef json.RawMessage `json:"acceptedAnswerSetRef,omitempty"`
+	BriefRef             json.RawMessage `json:"briefRef,omitempty"`
+	BriefRevision        string          `json:"briefRevision,omitempty"`
+	ContentRejections    string          `json:"contentRejections,omitempty"`
 }
 
 // LocalCheckResult is urn:anvilkit:operation-view:v1#/$defs/LocalCheckResult:

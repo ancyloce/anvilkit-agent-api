@@ -170,13 +170,18 @@ func seedOperation(t *testing.T, admin *pgx.Conn, operationID, tenantID string) 
 		activationID, "def-"+operationID, "cmd-"+operationID, fixtureDigest); err != nil {
 		t.Fatalf("seeding the activation: %v", err)
 	}
+	// A confirmed reservation carries its bound funding authority and quote
+	// (contracts/sql/control-v1.sql, test billing 2026-09-12); the synthetic
+	// row binds the test authority. These tests assert reads, not funding.
 	if _, err := admin.Exec(ctx, `
 		INSERT INTO agent_control.operations (
 			operation_id, tenant_id, actor_id, kind, intake_source, command_id, request_digest,
-			activation_id, funding_state, public_status, business_stage, control_state, cleanup_state,
-			accepted_at, next_event_seq)
+			activation_id, funding_state, funding_authority, authorized_funding_ref,
+			funding_policy_revision, quoted_credits, public_status, business_stage, control_state,
+			cleanup_state, accepted_at, next_event_seq)
 		VALUES ($1, $2, 'developer-fixture-1', 'generation', 'api', $3, $4, $5,
-			'reservation_confirmed', 'running', 'generating', 'running', 'not_required', now(), 1)`,
+			'reservation_confirmed', 'test', 'tq-' || $1, 'test-billing-2026-09-12', 1,
+			'running', 'generating', 'running', 'not_required', now(), 1)`,
 		operationID, tenantID, "cmd-"+operationID, fixtureDigest, activationID); err != nil {
 		t.Fatalf("seeding the operation: %v", err)
 	}
