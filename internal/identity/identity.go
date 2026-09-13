@@ -173,7 +173,7 @@ func parseIdentity(declared profileIdentity) (Actor, [sha256.Size]byte, error) {
 		TenantID: declared.TenantID,
 		actions:  actions,
 	}
-	if actor.Holds("operation.read") || actor.Holds("local-check.create") || actor.Holds("operation.cancel") {
+	if actor.Holds("operation.read") || actor.Holds("local-check.create") || actor.Holds("operation.cancel") || actor.Holds("component.prepare") {
 		actor.controlCredential = declared.Token
 	}
 	return actor, sha256.Sum256([]byte(declared.Token)), nil
