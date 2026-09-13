@@ -119,7 +119,7 @@ func testProfile(t *testing.T) *identity.Profile {
          "tenantId": "tenant-fixture-2", "grantedActions": ["operation.read"]},
         {"token": "` + localToken + `", "actorId": "developer-fixture-3",
          "tenantId": "tenant-fixture-3",
-         "grantedActions": ["local-check.create", "operation.cancel", "operation.read"]}
+         "grantedActions": ["local-check.create", "operation.cancel", "operation.read", "component.prepare"]}
       ]
     }`
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {

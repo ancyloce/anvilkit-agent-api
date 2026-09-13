@@ -89,6 +89,10 @@ type operationAccepted struct {
 	RequestDigest     string `json:"requestDigest,omitempty"`
 	QueueExpiresAt    string `json:"queueExpiresAt,omitempty"`
 	Existing          bool   `json:"existing"`
+	// Server-bound at intake for a preparation (test billing); absent for a
+	// local-check, which carries no authority and no quote.
+	FundingAuthority     string `json:"fundingAuthority,omitempty"`
+	AuthorizedFundingRef string `json:"authorizedFundingRef,omitempty"`
 }
 
 // controlCommand is the ControlCommand request body of the reserved lane.

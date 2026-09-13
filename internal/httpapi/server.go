@@ -53,6 +53,8 @@ type Dependencies struct {
 	Disclosure DisclosureAuthorizer
 	// Commands forwards public commands to Control.
 	Commands OperationCommander
+	// Preparations forwards the preparation answers and read (S2).
+	Preparations PreparationCommander
 	// ServesLocalChecks registers POST /v1/local-checks. It comes from the
 	// resolved serving profile, so the route is absent in every deployment that
 	// did not explicitly select the controlled local profile.
@@ -70,6 +72,7 @@ type Server struct {
 	control            DefinitionValidator
 	disclosure         DisclosureAuthorizer
 	commands           OperationCommander
+	preparations       PreparationCommander
 	readModel          ProjectionReader
 	servesLocalChecks  bool
 	hub                *streamHub
@@ -93,6 +96,7 @@ func NewServer(dependencies Dependencies) *Server {
 		control:            dependencies.Validator,
 		disclosure:         dependencies.Disclosure,
 		commands:           dependencies.Commands,
+		preparations:       dependencies.Preparations,
 		readModel:          dependencies.ReadModel,
 		servesLocalChecks:  dependencies.ServesLocalChecks,
 		controlCallTimeout: dependencies.ControlCallTimeout,
@@ -128,6 +132,15 @@ func (s *Server) PublicHandler() http.Handler {
 	if s.servesLocalChecks {
 		mux.HandleFunc("POST "+routeLocalChecks, s.handleSubmitLocalCheck)
 		mux.HandleFunc(routeLocalChecks, s.handleUndeclaredOperation)
+		// The preparation routes (S2) share the controlled local profile.
+		// A method-less pattern here would conflict with GET /v1/operations/{operationId};
+		// the read method is declared absent explicitly instead.
+		mux.HandleFunc("POST "+routePreparations, s.handleSubmitPreparation)
+		mux.HandleFunc("GET "+routePreparations, s.handleUndeclaredOperation)
+		mux.HandleFunc("POST "+routePreparationAnswers, s.handleSubmitPreparationAnswers)
+		mux.HandleFunc(routePreparationAnswers, s.handleUndeclaredOperation)
+		mux.HandleFunc("GET "+routePreparationDetail, s.handleReadPreparation)
+		mux.HandleFunc(routePreparationDetail, s.handleUndeclaredOperation)
 		for _, route := range []string{routeOperationHold, routeOperationResume} {
 			mux.HandleFunc("POST "+route, s.handleUnsupportedLocalControlCommand)
 			mux.HandleFunc(route, s.handleUndeclaredOperation)

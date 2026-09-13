@@ -34,6 +34,8 @@ type ControlClients struct {
 	Disclosure DisclosureAuthorizer
 	// Commands forwards the public commands this service accepts.
 	Commands OperationCommander
+	// Preparations forwards the preparation answers and read (S2).
+	Preparations PreparationCommander
 }
 
 // ControlClientConfig separates service TLS identity from the existing local
@@ -103,8 +105,9 @@ func NewControlClient(cfg ControlClientConfig) (ControlClients, error) {
 	})
 	control := controlv1connect.NewControlServiceClient(httpClient, endpoint, connect.WithGRPC())
 	return ControlClients{
-		Validation: definitionvalidationv1connect.NewDefinitionValidationClient(httpClient, endpoint, connect.WithGRPC(), connect.WithInterceptors(validationCredential)),
-		Disclosure: control,
-		Commands:   control,
+		Validation:   definitionvalidationv1connect.NewDefinitionValidationClient(httpClient, endpoint, connect.WithGRPC(), connect.WithInterceptors(validationCredential)),
+		Disclosure:   control,
+		Commands:     control,
+		Preparations: control,
 	}, nil
 }
