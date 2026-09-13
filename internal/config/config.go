@@ -29,6 +29,11 @@ const (
 	// retained fixture identifier.
 	LocalCheckBodyMaxBytes = 1024
 
+	// PreparationBodyMaxBytes is preparation.commandBodyMaxBytes: the ceiling of
+	// POST /v1/operations/preparations and /preparation-answers, whose bodies
+	// carry the inline input record or answer set (S2, 2026-09-13).
+	PreparationBodyMaxBytes = 16384
+
 	// ValidationMaxIssues is definition.validationMaxIssues.
 	ValidationMaxIssues = 100
 
