@@ -1,0 +1,20 @@
+# anvilkit-agent-api configuration (reviewed, secret-free). Loaded by
+# internal/config with precedence defaults < this file < allowed environment
+# overrides (ANVILKIT_API_LISTEN, ANVILKIT_API_CONTROL_ADDRESS,
+# ANVILKIT_API_AUTH_MODE, ANVILKIT_API_PRINCIPALS_FILE). Unknown keys fail
+# startup. Secrets never belong here; the fixture principals file is a
+# DEVELOPMENT_ONLY input supplied by path through the environment.
+http:
+  listen: 127.0.0.1:9100
+  read_header_timeout: 10s
+  body_limit_bytes: 262144
+  shutdown_timeout: 20s
+control:
+  address: 127.0.0.1:9101
+auth:
+  mode: fixture
+sse:
+  heartbeat_interval: 15s
+  frame_buffer: 64
+  slow_consumer_grace: 5s
+  write_timeout: 10s
