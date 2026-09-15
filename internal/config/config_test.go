@@ -1,159 +1,81 @@
-package config
+package config_test
 
 import (
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/ancyloce/anvilkit-agent-api/internal/config"
 )
 
-func setMinimum(t *testing.T) {
+func write(t *testing.T, body string) string {
 	t.Helper()
-	t.Setenv(EnvPublicListen, "127.0.0.1:8443")
-	t.Setenv(EnvPrivateListen, "127.0.0.1:8444")
-	t.Setenv(EnvControlEndpoint, "https://control.internal:8443")
-	t.Setenv(EnvValidationToken, "controlled-private-validation-token-0001")
-	t.Setenv(EnvReadDSN, "postgres://anvilkit_api_ro@127.0.0.1:5432/anvilkit")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
 }
 
-func TestLoadRequiresEveryDeploymentAddress(t *testing.T) {
-	t.Setenv(EnvPublicListen, "")
-	t.Setenv(EnvPrivateListen, "")
-	t.Setenv(EnvControlEndpoint, "")
-	t.Setenv(EnvReadDSN, "")
+const minimal = "control:\n  address: 127.0.0.1:9101\nauth:\n  mode: fixture\n"
 
-	_, err := Load("instance")
-	if err == nil {
-		t.Fatal("expected the missing addresses to be reported")
-	}
-	for _, name := range []string{EnvPublicListen, EnvPrivateListen, EnvControlEndpoint, EnvReadDSN} {
-		if !strings.Contains(err.Error(), name) {
-			t.Fatalf("expected %s to be named in the startup error", name)
-		}
-	}
+var env = []string{"ANVILKIT_API_PRINCIPALS_FILE=/run/principals.json", "HOME=/root", "ANVILKIT_CONTROL_LISTEN=ignored-other-service"}
+
+// Defaults, then the file, then the allowed environment overrides.
+func TestPrecedenceDefaultsFileEnvironment(t *testing.T) {
+	c, err := config.LoadFrom(write(t, minimal+"http:\n  listen: 0.0.0.0:8080\nsse:\n  frame_buffer: 8\n"), append(env, "ANVILKIT_API_LISTEN=127.0.0.1:9999"))
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:9999", c.HTTP.Listen, "environment overrides the file")
+	require.Equal(t, 8, c.SSE.FrameBuffer, "file overrides the default")
+	require.Equal(t, 15*time.Second, c.SSE.HeartbeatInterval, "default kept")
+	require.Equal(t, int64(256<<10), c.HTTP.BodyLimitBytes)
+	require.Equal(t, "/run/principals.json", c.Auth.PrincipalsFile)
+	require.Equal(t, "127.0.0.1:9101", c.Control.Address)
 }
 
-func TestLoadAppliesDocumentedDefaults(t *testing.T) {
-	setMinimum(t)
-	cfg, err := Load("fallback-instance")
-	if err != nil {
-		t.Fatalf("expected the minimum configuration to load, got %v", err)
-	}
-	if cfg.ControlCallTimeout != defaultControlCallTimeout {
-		t.Fatalf("expected the default Control timeout, got %v", cfg.ControlCallTimeout)
-	}
-	if cfg.Environment != defaultEnvironment || cfg.ServiceVersion != defaultServiceVersion {
-		t.Fatalf("expected the documented telemetry defaults, got %+v", cfg)
-	}
-	if cfg.ServiceInstanceID != "fallback-instance" {
-		t.Fatalf("expected the supplied instance fallback, got %q", cfg.ServiceInstanceID)
-	}
-	if cfg.IdentityProfilePath != "" {
-		t.Fatal("no identity profile is configured by default")
-	}
+// The checked-in service file is a valid candidate once the deployment
+// placement is supplied.
+func TestCheckedInFileLoads(t *testing.T) {
+	c, err := config.LoadFrom(filepath.Join("..", "..", "config.yaml"), env)
+	require.NoError(t, err)
+	require.Equal(t, "fixture", c.Auth.Mode)
 }
 
-func TestLoadRejectsAnUnusableControlTimeout(t *testing.T) {
-	for _, value := range []string{"not-a-number", "0", "-1", "3600"} {
-		t.Run(value, func(t *testing.T) {
-			setMinimum(t)
-			t.Setenv(EnvControlCallTimeout, value)
-			if _, err := Load("instance"); err == nil {
-				t.Fatalf("expected %q to be refused", value)
-			}
-		})
-	}
+func TestUnknownKeysAreRejected(t *testing.T) {
+	_, err := config.LoadFrom(write(t, minimal+"sse:\n  hartbeat_interval: 5s\n"), env)
+	require.ErrorContains(t, err, "hartbeat_interval")
+	_, err = config.LoadFrom(write(t, minimal+"database:\n  url: postgres://x\n"), env)
+	require.ErrorContains(t, err, "database")
+	_, err = config.LoadFrom(write(t, minimal), append(env, "ANVILKIT_API_SSE_FRAME_BUFFER=2"))
+	require.ErrorContains(t, err, "ANVILKIT_API_SSE_FRAME_BUFFER", "only the allowlisted overrides exist")
 }
 
-func TestLoadAcceptsABoundedControlTimeout(t *testing.T) {
-	setMinimum(t)
-	t.Setenv(EnvControlCallTimeout, "30")
-	cfg, err := Load("instance")
-	if err != nil {
-		t.Fatalf("expected a bounded timeout to load, got %v", err)
-	}
-	if cfg.ControlCallTimeout != 30*time.Second {
-		t.Fatalf("expected 30s, got %v", cfg.ControlCallTimeout)
-	}
+func TestMissingFileFails(t *testing.T) {
+	_, err := config.LoadFrom(filepath.Join(t.TempDir(), "absent.yaml"), env)
+	require.Error(t, err)
 }
 
-func TestLoadKeepsHealthOffThePublicListener(t *testing.T) {
-	setMinimum(t)
-	t.Setenv(EnvPrivateListen, "127.0.0.1:8443")
-	if _, err := Load("instance"); err == nil {
-		t.Fatal("expected a shared listener address to be refused")
-	}
+func TestRequiredValues(t *testing.T) {
+	_, err := config.LoadFrom(write(t, "auth:\n  mode: fixture\n"), env)
+	require.ErrorContains(t, err, "control.address is required")
+	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\n"), env)
+	require.ErrorContains(t, err, "auth.mode is required")
+	_, err = config.LoadFrom(write(t, minimal), []string{})
+	require.ErrorContains(t, err, "auth.principals_file is required")
+	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\nauth:\n  mode: oidc\n"), env)
+	require.ErrorContains(t, err, "not implemented")
 }
 
-func TestLoadValidatesTelemetryIdentity(t *testing.T) {
-	setMinimum(t)
-	t.Setenv(EnvEnvironment, "not a valid id")
-	if _, err := Load("instance"); err == nil {
-		t.Fatal("expected an invalid environment identifier to be refused")
-	}
-}
-
-func TestContractLimitsMatchThePilotProfile(t *testing.T) {
-	// These mirror contracts/profiles/pilot-limits-v1.json. A drift here would
-	// silently widen or narrow a contract ceiling.
-	if RequestBodyMaxBytes != 65536 {
-		t.Fatalf("ingress.commandBodyMaxBytes is 65536, got %d", RequestBodyMaxBytes)
-	}
-	if ValidationMaxIssues != 100 {
-		t.Fatalf("definition.validationMaxIssues is 100, got %d", ValidationMaxIssues)
-	}
-	if DrainGrace != 30*time.Second {
-		t.Fatalf("api.drainGraceSeconds is 30, got %v", DrainGrace)
-	}
-}
-
-// TestServingProfileIsOptInAndClosed proves that the local surface is never
-// reached by accident: the default profile does not serve it, an unrecognized
-// value refuses to start rather than falling back, and only the explicit
-// controlled-local profile turns it on.
-func TestServingProfileIsOptInAndClosed(t *testing.T) {
-	t.Run("default", func(t *testing.T) {
-		setMinimum(t)
-		cfg, err := Load("instance")
-		if err != nil {
-			t.Fatalf("expected the minimum configuration to load, got %v", err)
-		}
-		if cfg.Profile != ProfileStandard || cfg.ServesLocalChecks() {
-			t.Fatalf("the default profile serves local checks: %+v", cfg.Profile)
-		}
-	})
-
-	t.Run("controlled local", func(t *testing.T) {
-		setMinimum(t)
-		t.Setenv(EnvProfile, ProfileControlledLocal)
-		cfg, err := Load("instance")
-		if err != nil {
-			t.Fatalf("expected the controlled local profile to load, got %v", err)
-		}
-		if !cfg.ServesLocalChecks() {
-			t.Fatal("the controlled local profile does not serve local checks")
-		}
-	})
-
-	for _, value := range []string{"local", "production", "CONTROLLED-LOCAL", "controlled local", "true"} {
-		t.Run("refused "+value, func(t *testing.T) {
-			setMinimum(t)
-			t.Setenv(EnvProfile, value)
-			if _, err := Load("instance"); err == nil {
-				t.Fatalf("expected the profile %q to be refused", value)
-			}
-		})
-	}
-
-	// The telemetry environment must not double as a capability switch.
-	t.Run("environment does not enable the route", func(t *testing.T) {
-		setMinimum(t)
-		t.Setenv(EnvEnvironment, "local")
-		cfg, err := Load("instance")
-		if err != nil {
-			t.Fatalf("expected the configuration to load, got %v", err)
-		}
-		if cfg.ServesLocalChecks() {
-			t.Fatal("a local telemetry environment enabled the local-check route")
-		}
-	})
+func TestRangesAndCrossFieldRules(t *testing.T) {
+	_, err := config.LoadFrom(write(t, minimal+"sse:\n  frame_buffer: 0\n"), env)
+	require.ErrorContains(t, err, "sse.frame_buffer")
+	_, err = config.LoadFrom(write(t, minimal+"http:\n  body_limit_bytes: 10\n"), env)
+	require.ErrorContains(t, err, "http.body_limit_bytes")
+	_, err = config.LoadFrom(write(t, minimal+"sse:\n  write_timeout: 30s\n  slow_consumer_grace: 1s\n  heartbeat_interval: 1s\n"), env)
+	require.ErrorContains(t, err, "sse.write_timeout 30s must not exceed")
+	_, err = config.LoadFrom(write(t, minimal+"http:\n  shutdown_timeout: 0s\n"), env)
+	require.ErrorContains(t, err, "http.shutdown_timeout")
+	_, err = config.LoadFrom(write(t, minimal+"sse:\n  frame_buffer: many\n"), env)
+	require.Error(t, err, "a value of the wrong type is rejected")
 }

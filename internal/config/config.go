@@ -1,260 +1,194 @@
-// Package config resolves the anvilkit-agent-api runtime configuration from the
-// process environment.
-//
-// The architecture supplies no ports, endpoints or credentials, so the listener
-// and dependency addresses are required deployment inputs with no built-in
-// default. Values owned by the parent pilot limit profile
-// (contracts/profiles/pilot-limits-v1.json) are compiled in as named constants
-// instead, so a deployment cannot quietly widen a contract ceiling.
+// Package config builds the API's immutable configuration snapshot with
+// koanf (A09, DD-09 §4). Precedence is defaults < the service's reviewed
+// configuration file < the allowed ANVILKIT_API_* environment overrides. The
+// candidate is validated (unknown keys, required values, ranges, cross-field
+// rules) before anything else starts; business code receives the validated
+// value and never reads the environment or a mutable global.
 package config
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
-	"strconv"
+	"sort"
+	"strings"
 	"time"
-)
 
-// Limits mirrored from contracts/profiles/pilot-limits-v1.json. These are pilot
-// and development defaults recorded by the architecture, not measured capacity.
-const (
-	// RequestBodyMaxBytes is ingress.commandBodyMaxBytes, which is also the
-	// x-anvilkit-max-body-bytes ceiling of POST /v1/definitions/validations.
-	RequestBodyMaxBytes = 65536
-
-	// LocalCheckBodyMaxBytes is localCheck.commandBodyMaxBytes: the ceiling of
-	// POST /v1/local-checks, whose body carries only a command identifier and a
-	// retained fixture identifier.
-	LocalCheckBodyMaxBytes = 1024
-
-	// PreparationBodyMaxBytes is preparation.commandBodyMaxBytes: the ceiling of
-	// POST /v1/operations/preparations and /preparation-answers, whose bodies
-	// carry the inline input record or answer set (S2, 2026-09-13).
-	PreparationBodyMaxBytes = 16384
-
-	// ValidationMaxIssues is definition.validationMaxIssues.
-	ValidationMaxIssues = 100
-
-	// DrainGrace is api.drainGraceSeconds: readiness turns false, new requests
-	// are refused and in-flight requests finish inside this window.
-	DrainGrace = 30 * time.Second
-
-	// ReadinessReadRoleWindow is api.readinessReadRoleWindowSeconds: readiness
-	// requires the projection read role to have answered inside this window.
-	ReadinessReadRoleWindow = 10 * time.Second
-
-	// ClockMaxInterServiceError is clock.maxInterServiceErrorSeconds. A
-	// disclosure grant within this margin of its expiry counts as expired, so
-	// the API can only ever be early about revocation, never late.
-	ClockMaxInterServiceError = 2 * time.Second
-
-	// AuthorizationFreshness is authorization.freshnessSeconds: the longest a
-	// stream may hold one disclosure grant before renewing it.
-	AuthorizationFreshness = 30 * time.Second
-
-	// ReplayPageEvents is sse.replayPageEvents.
-	ReplayPageEvents = 200
-
-	// SubscriberBufferEvents and SubscriberBufferBytes are
-	// sse.subscriberBufferEvents and sse.subscriberBufferBytes: the per-
-	// subscriber backlog this replica holds before it stops advancing that
-	// subscriber's position.
-	SubscriberBufferEvents = 256
-	SubscriberBufferBytes  = 1048576
-
-	// SlowConsumerClose is sse.slowConsumerCloseSeconds: how long a subscriber
-	// may fail to drain before its connection is closed.
-	SlowConsumerClose = 30 * time.Second
-
-	// Heartbeat is sse.heartbeatSeconds. A heartbeat is a comment line with no
-	// id, so it never advances a durable cursor.
-	Heartbeat = 15 * time.Second
-
-	// SharedCatchup is sse.sharedCatchupSeconds: the interval of the catch-up
-	// read shared by every subscriber of an operation.
-	SharedCatchup = time.Second
-
-	// SnapshotProtection is sse.snapshotProtectionSeconds: how long the pages
-	// of one snapshot stay claimable before the handshake restarts.
-	SnapshotProtection = 60 * time.Second
-
-	// ReconnectHintMin and ReconnectHintMax are sse.reconnectHintMinSeconds and
-	// sse.reconnectHintMaxSeconds: the randomized pause a drained replica asks
-	// a client to wait, so a drain does not return as a synchronized reconnect.
-	ReconnectHintMin = 1 * time.Second
-	ReconnectHintMax = 5 * time.Second
-)
-
-// Environment variable names. Every input this service reads is listed here so
-// the README and the deployment record describe the same surface.
-const (
-	EnvPublicListen        = "ANVILKIT_API_PUBLIC_LISTEN"
-	EnvPrivateListen       = "ANVILKIT_API_PRIVATE_LISTEN"
-	EnvControlEndpoint     = "ANVILKIT_API_CONTROL_ENDPOINT"
-	EnvControlCA           = "ANVILKIT_API_CONTROL_CA"
-	EnvControlCert         = "ANVILKIT_API_CONTROL_CERT"
-	EnvControlKey          = "ANVILKIT_API_CONTROL_KEY"
-	EnvValidationToken     = "ANVILKIT_API_CONTROL_VALIDATION_TOKEN"
-	EnvReadDSN             = "ANVILKIT_API_READ_DSN"
-	EnvControlCallTimeout  = "ANVILKIT_API_CONTROL_TIMEOUT_SECONDS"
-	EnvIdentityProfilePath = "ANVILKIT_API_IDENTITY_PROFILE"
-	EnvProfile             = "ANVILKIT_API_PROFILE"
-	EnvEnvironment         = "ANVILKIT_API_ENVIRONMENT"
-	EnvServiceVersion      = "ANVILKIT_API_SERVICE_VERSION"
-	EnvServiceInstanceID   = "ANVILKIT_API_SERVICE_INSTANCE_ID"
-)
-
-// Serving profiles. The profile decides which public operations exist at all,
-// so a route reserved for controlled local verification cannot be reached in a
-// standard deployment by any request, header or body an attacker can send.
-const (
-	// ProfileStandard serves the business surface only.
-	ProfileStandard = "standard"
-	// ProfileControlledLocal additionally registers POST /v1/local-checks for
-	// the fixed local-check profile (DD-02 #local-check-admission). Control
-	// enforces the same restriction independently; neither side relies on the
-	// other to keep the route out of a deployment.
-	ProfileControlledLocal = "controlled-local"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/confmap"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 )
 
 const (
-	defaultControlCallTimeout = 10 * time.Second
-	maxControlCallTimeout     = 120 * time.Second
-	defaultEnvironment        = "local"
-	defaultServiceVersion     = "0.0.0-development"
+	envPrefix = "ANVILKIT_API_"
+	// EnvConfigFile names the configuration file; it is the only variable
+	// read before the snapshot exists.
+	EnvConfigFile = "ANVILKIT_API_CONFIG"
+	// DefaultConfigFile is the file next to the service (config.yaml in the
+	// working directory) when EnvConfigFile is unset.
+	DefaultConfigFile = "config.yaml"
 )
 
-// identifierPattern is urn:anvilkit:values:v1#/$defs/id.
-var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
-
-// Config is the resolved runtime configuration of one API process.
-type Config struct {
-	// PublicListenAddress serves the tenant-facing HTTPS surface.
-	PublicListenAddress string
-	// PrivateListenAddress serves /healthz and /readyz only. The architecture
-	// keeps health off the public listener.
-	PrivateListenAddress string
-	// ControlEndpoint is the authenticated base URL of anvilkit-agent-control.
-	ControlEndpoint string
-	// Control TLS inputs authenticate this service; the validation credential
-	// is the existing controlled method grant, separate from public tokens.
-	ControlCA, ControlCert, ControlKey, ValidationToken string
-	// ReadDSN connects the restricted anvilkit_api_ro role to the Agent
-	// database. Pool sizing travels in the DSN because the architecture records
-	// connection-pool values as a per-environment input.
-	ReadDSN string
-	// ControlCallTimeout bounds one Control call attempt.
-	ControlCallTimeout time.Duration
-	// IdentityProfilePath points at the controlled identity profile. An empty
-	// path leaves the profile empty, which denies every protected route.
-	IdentityProfilePath string
-	// Profile is the serving profile: ProfileStandard or ProfileControlledLocal.
-	// It defaults to ProfileStandard, so the local surface is opt-in.
-	Profile string
-	// Environment, ServiceVersion and ServiceInstanceID are required by
-	// contracts/telemetry/log-record-v1.schema.json.
-	Environment       string
-	ServiceVersion    string
-	ServiceInstanceID string
+// HTTP is the public listener.
+type HTTP struct {
+	Listen            string        `koanf:"listen"`
+	ReadHeaderTimeout time.Duration `koanf:"read_header_timeout"`
+	BodyLimitBytes    int64         `koanf:"body_limit_bytes"`
+	ShutdownTimeout   time.Duration `koanf:"shutdown_timeout"`
 }
 
-// Load reads the configuration from the process environment. It reports every
-// problem it finds rather than the first, so a misconfigured deployment needs
-// one startup attempt to diagnose.
-func Load(instanceIDFallback string) (Config, error) {
-	var problems []error
+// Control is the gRPC dependency.
+type Control struct {
+	Address string `koanf:"address"`
+}
 
-	cfg := Config{
-		PublicListenAddress:  os.Getenv(EnvPublicListen),
-		PrivateListenAddress: os.Getenv(EnvPrivateListen),
-		ControlEndpoint:      os.Getenv(EnvControlEndpoint),
-		ControlCA:            os.Getenv(EnvControlCA),
-		ControlCert:          os.Getenv(EnvControlCert),
-		ControlKey:           os.Getenv(EnvControlKey),
-		ValidationToken:      os.Getenv(EnvValidationToken),
-		ReadDSN:              os.Getenv(EnvReadDSN),
-		IdentityProfilePath:  os.Getenv(EnvIdentityProfilePath),
-		Profile:              valueOrDefault(EnvProfile, ProfileStandard),
-		Environment:          valueOrDefault(EnvEnvironment, defaultEnvironment),
-		ServiceVersion:       valueOrDefault(EnvServiceVersion, defaultServiceVersion),
-		ServiceInstanceID:    valueOrDefault(EnvServiceInstanceID, instanceIDFallback),
-	}
+// Auth selects the identity protocol. Only the DEVELOPMENT_ONLY "fixture"
+// mode exists until ENV-07 supplies the IdP inputs.
+type Auth struct {
+	Mode           string `koanf:"mode"`
+	PrincipalsFile string `koanf:"principals_file"`
+}
 
-	required := []struct {
-		name  string
-		value string
-	}{
-		{EnvPublicListen, cfg.PublicListenAddress},
-		{EnvPrivateListen, cfg.PrivateListenAddress},
-		{EnvControlEndpoint, cfg.ControlEndpoint},
-		{EnvValidationToken, cfg.ValidationToken},
-		{EnvReadDSN, cfg.ReadDSN},
+// SSE bounds the event stream transport (contracts.md §6): they are
+// transport limits, never business clocks.
+type SSE struct {
+	HeartbeatInterval time.Duration `koanf:"heartbeat_interval"`
+	FrameBuffer       int           `koanf:"frame_buffer"`
+	SlowConsumerGrace time.Duration `koanf:"slow_consumer_grace"`
+	WriteTimeout      time.Duration `koanf:"write_timeout"`
+}
+
+type Config struct {
+	HTTP    HTTP    `koanf:"http"`
+	Control Control `koanf:"control"`
+	Auth    Auth    `koanf:"auth"`
+	SSE     SSE     `koanf:"sse"`
+}
+
+// defaults are the reviewed baseline values; the file and the allowed
+// overrides refine them.
+var defaults = map[string]any{
+	"http.listen":              "127.0.0.1:9100",
+	"http.read_header_timeout": "10s",
+	"http.body_limit_bytes":    256 << 10,
+	"http.shutdown_timeout":    "20s",
+	"sse.heartbeat_interval":   "15s",
+	"sse.frame_buffer":         64,
+	"sse.slow_consumer_grace":  "5s",
+	"sse.write_timeout":        "10s",
+}
+
+// envOverrides is the complete set of environment variables the service
+// accepts: deployment placement only. Any other ANVILKIT_API_* variable is an
+// unknown key and rejects the candidate.
+var envOverrides = map[string]string{
+	"ANVILKIT_API_LISTEN":          "http.listen",
+	"ANVILKIT_API_CONTROL_ADDRESS": "control.address",
+	"ANVILKIT_API_AUTH_MODE":       "auth.mode",
+	"ANVILKIT_API_PRINCIPALS_FILE": "auth.principals_file",
+}
+
+// Load builds the snapshot from the file named by EnvConfigFile (or
+// DefaultConfigFile) and the process environment.
+func Load() (Config, error) {
+	path := os.Getenv(EnvConfigFile)
+	if path == "" {
+		path = DefaultConfigFile
 	}
-	for _, input := range required {
-		if input.value == "" {
-			problems = append(problems, fmt.Errorf("%s is required and has no default", input.name))
+	return LoadFrom(path, os.Environ())
+}
+
+// LoadFrom is Load with explicit inputs (tests).
+func LoadFrom(path string, environ []string) (Config, error) {
+	k := koanf.New(".")
+	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
+		return Config{}, err
+	}
+	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+		return Config{}, fmt.Errorf("config file %s: %w", path, err)
+	}
+	if err := applyEnv(k, environ); err != nil {
+		return Config{}, err
+	}
+	var c Config
+	if err := k.UnmarshalWithConf("", &c, koanf.UnmarshalConf{DecoderConfig: &mapstructure.DecoderConfig{
+		DecodeHook:       mapstructure.StringToTimeDurationHookFunc(),
+		ErrorUnused:      true, // unknown keys in the file or the overrides reject the candidate
+		WeaklyTypedInput: true,
+		Result:           &c,
+	}}); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
+	return c, c.validate()
+}
+
+func applyEnv(k *koanf.Koanf, environ []string) error {
+	var unknown []string
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, envPrefix) || name == EnvConfigFile {
+			continue
+		}
+		key, ok := envOverrides[name]
+		if !ok {
+			unknown = append(unknown, name)
+			continue
+		}
+		if err := k.Set(key, value); err != nil {
+			return err
 		}
 	}
-
-	if cfg.PublicListenAddress != "" && cfg.PublicListenAddress == cfg.PrivateListenAddress {
-		problems = append(problems, fmt.Errorf(
-			"%s and %s must differ so health endpoints stay off the public listener",
-			EnvPublicListen, EnvPrivateListen))
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("config: environment variables are not allowed overrides: %s", strings.Join(unknown, ", "))
 	}
-
-	timeout, err := controlCallTimeout()
-	if err != nil {
-		problems = append(problems, err)
-	}
-	cfg.ControlCallTimeout = timeout
-
-	if cfg.Profile != ProfileStandard && cfg.Profile != ProfileControlledLocal {
-		problems = append(problems, fmt.Errorf(
-			"%s must be %q or %q", EnvProfile, ProfileStandard, ProfileControlledLocal))
-	}
-
-	if !identifierPattern.MatchString(cfg.Environment) || len(cfg.Environment) > 128 {
-		problems = append(problems, fmt.Errorf("%s must be a values-v1 identifier", EnvEnvironment))
-	}
-	if cfg.ServiceVersion == "" || len(cfg.ServiceVersion) > 128 {
-		problems = append(problems, fmt.Errorf("%s must be 1 to 128 characters", EnvServiceVersion))
-	}
-	if cfg.ServiceInstanceID == "" || len(cfg.ServiceInstanceID) > 128 {
-		problems = append(problems, fmt.Errorf("%s must be 1 to 128 characters", EnvServiceInstanceID))
-	}
-
-	if len(problems) > 0 {
-		return Config{}, errors.Join(problems...)
-	}
-	return cfg, nil
+	return nil
 }
 
-// ServesLocalChecks reports whether this process registers the local-check
-// route. Only the resolved profile decides it.
-func (c Config) ServesLocalChecks() bool { return c.Profile == ProfileControlledLocal }
-
-func valueOrDefault(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
+func (c Config) validate() error {
+	var errs []error
+	req := func(name, v string) {
+		if v == "" {
+			errs = append(errs, fmt.Errorf("%s is required", name))
+		}
 	}
-	return fallback
-}
-
-func controlCallTimeout() (time.Duration, error) {
-	raw := os.Getenv(EnvControlCallTimeout)
-	if raw == "" {
-		return defaultControlCallTimeout, nil
+	req("http.listen", c.HTTP.Listen)
+	req("control.address", c.Control.Address)
+	if c.HTTP.ReadHeaderTimeout < time.Second || c.HTTP.ReadHeaderTimeout > time.Minute {
+		errs = append(errs, fmt.Errorf("http.read_header_timeout %s outside [1s, 1m]", c.HTTP.ReadHeaderTimeout))
 	}
-	seconds, err := strconv.Atoi(raw)
-	if err != nil {
-		return defaultControlCallTimeout, fmt.Errorf("%s must be an integer number of seconds", EnvControlCallTimeout)
+	if c.HTTP.BodyLimitBytes < 1<<10 || c.HTTP.BodyLimitBytes > 16<<20 {
+		errs = append(errs, fmt.Errorf("http.body_limit_bytes %d outside [1KiB, 16MiB]", c.HTTP.BodyLimitBytes))
 	}
-	timeout := time.Duration(seconds) * time.Second
-	if timeout <= 0 || timeout > maxControlCallTimeout {
-		return defaultControlCallTimeout, fmt.Errorf(
-			"%s must be between 1 and %d seconds", EnvControlCallTimeout, int(maxControlCallTimeout.Seconds()))
+	if c.HTTP.ShutdownTimeout < time.Second || c.HTTP.ShutdownTimeout > 5*time.Minute {
+		errs = append(errs, fmt.Errorf("http.shutdown_timeout %s outside [1s, 5m]", c.HTTP.ShutdownTimeout))
 	}
-	return timeout, nil
+	switch c.Auth.Mode {
+	case "fixture":
+		req("auth.principals_file", c.Auth.PrincipalsFile)
+	case "":
+		errs = append(errs, errors.New("auth.mode is required: only the DEVELOPMENT_ONLY value \"fixture\" exists until ENV-07 supplies the IdP protocol"))
+	default:
+		errs = append(errs, fmt.Errorf("auth.mode %q is not implemented", c.Auth.Mode))
+	}
+	if c.SSE.HeartbeatInterval < time.Second || c.SSE.HeartbeatInterval > 5*time.Minute {
+		errs = append(errs, fmt.Errorf("sse.heartbeat_interval %s outside [1s, 5m]", c.SSE.HeartbeatInterval))
+	}
+	if c.SSE.FrameBuffer < 1 || c.SSE.FrameBuffer > 4096 {
+		errs = append(errs, fmt.Errorf("sse.frame_buffer %d outside [1, 4096]", c.SSE.FrameBuffer))
+	}
+	if c.SSE.SlowConsumerGrace < 100*time.Millisecond || c.SSE.SlowConsumerGrace > time.Minute {
+		errs = append(errs, fmt.Errorf("sse.slow_consumer_grace %s outside [100ms, 1m]", c.SSE.SlowConsumerGrace))
+	}
+	if c.SSE.WriteTimeout < 100*time.Millisecond || c.SSE.WriteTimeout > time.Minute {
+		errs = append(errs, fmt.Errorf("sse.write_timeout %s outside [100ms, 1m]", c.SSE.WriteTimeout))
+	}
+	// A stalled write must be given up before the producer's grace expires,
+	// otherwise the handler could block past the bound it promises.
+	if c.SSE.WriteTimeout > c.SSE.SlowConsumerGrace+c.SSE.HeartbeatInterval {
+		errs = append(errs, fmt.Errorf("sse.write_timeout %s must not exceed slow_consumer_grace + heartbeat_interval", c.SSE.WriteTimeout))
+	}
+	return errors.Join(errs...)
 }
