@@ -30,11 +30,11 @@ The service reads one reviewed, secret-free file (`config.yaml`, path from `ANVI
 ```sh
 export GOWORK=off GOFLAGS=-mod=readonly
 go build ./... && go vet ./... && go test -count=1 ./... && go test -race -count=1 ./internal/transport/...
-docker build -t anvilkit-agent-api:dev .          # --build-arg GOPROXY=... GONOSUMDB=... for a private/local module proxy
+docker build -t anvilkit-agent-api:dev .          # --build-arg GOPROXY=... GONOSUMDB=... only for a private module proxy
 helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals
 ```
 
-The contract module is obtainable only once its tag (`go/vX.Y.Z`) exists on the `anvilkit-agent-contracts` remote; until then a local module proxy built from that repository stands in (`GOPROXY=file:///...,https://proxy.golang.org,direct GONOSUMDB=github.com/ancyloce/anvilkit-agent-contracts`), which is a local versioned artifact, not a publication.
+The contract module is an ordinary published dependency: `github.com/ancyloce/anvilkit-agent-contracts/go v0.1.0` is the tag `go/v0.1.0` of the `anvilkit-agent-contracts` repository, served by `proxy.golang.org` and verified against the checksum database (`go.sum`: `h1:2vk5EHKnTRoCpW5EHeMGWzfCp//M5MQ+EDWxRlNqXKc=`; the zip includes that repository's root `LICENSE`, as Go requires for a module in a subdirectory). No replace directive, workspace or local proxy is involved; a newer contract version is adopted by changing the `require` line.
 
 ## Deploy
 
