@@ -1,0 +1,38 @@
+# Independent verification of anvilkit-agent-api from this repository alone:
+# build, vet, test and the race check of the transport with GOWORK=off, the
+# image from the repository root, and the chart's lint and render.
+name: ci
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+env:
+  GOWORK: "off"
+  GOFLAGS: "-mod=readonly"
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      - run: go test -race -count=1 ./internal/transport/...
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t anvilkit-agent-api:ci .
+  chart:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.19.0"
+      - run: helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals
+      - run: helm template anvilkit-agent-api deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals > /dev/null
