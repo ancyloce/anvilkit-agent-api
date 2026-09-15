@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "anvilkit-agent-api.fullname" . }}
+  labels:
+    {{- include "anvilkit-agent-api.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "anvilkit-agent-api.selectorLabels" . | nindent 6 }}
+{{- end }}

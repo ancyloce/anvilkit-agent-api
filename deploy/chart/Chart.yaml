@@ -1,0 +1,6 @@
+apiVersion: v2
+name: anvilkit-agent-api
+description: The AnvilKit Agent public REST/SSE service (anvilkit-agent-api) - the service's own chart; environment values and the pinned deployment combination belong to the deploying repository.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

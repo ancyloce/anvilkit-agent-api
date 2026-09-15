@@ -1,0 +1,122 @@
+{{- if not .Values.control.address }}
+{{- fail "control.address is required: the Control gRPC endpoint (ANVILKIT_API_CONTROL_ADDRESS)" }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "fixture") (not .Values.auth.principalsSecret.name) }}
+{{- fail "auth.principalsSecret.name is required in fixture mode: an existing Secret holding the principals file (never created by this chart)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "anvilkit-agent-api.fullname" . }}
+  labels:
+    {{- include "anvilkit-agent-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "anvilkit-agent-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "anvilkit-agent-api.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # A changed configuration file rolls the Pods.
+        checksum/config: {{ toYaml .Values.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "anvilkit-agent-api.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      # No injected service-link variables: the configuration loader rejects
+      # any ANVILKIT_API_* variable outside its allowlist.
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "anvilkit-agent-api.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # The allowlisted environment overrides of internal/config: the file
+          # path, the placement values and the DEVELOPMENT_ONLY fixture inputs.
+          env:
+            - name: ANVILKIT_API_CONFIG
+              value: /etc/anvilkit/anvilkit-agent-api/config.yaml
+            - name: ANVILKIT_API_LISTEN
+              value: {{ printf "%s:%d" .Values.listen.address (int .Values.listen.port) | quote }}
+            - name: ANVILKIT_API_CONTROL_ADDRESS
+              value: {{ .Values.control.address | quote }}
+            - name: ANVILKIT_API_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            {{- if eq .Values.auth.mode "fixture" }}
+            - name: ANVILKIT_API_PRINCIPALS_FILE
+              value: {{ printf "/etc/anvilkit/principals/%s" .Values.auth.principalsSecret.key | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.listen.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/anvilkit/anvilkit-agent-api
+              readOnly: true
+            {{- if eq .Values.auth.mode "fixture" }}
+            - name: principals
+              mountPath: /etc/anvilkit/principals
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "anvilkit-agent-api.fullname" . }}
+        {{- if eq .Values.auth.mode "fixture" }}
+        - name: principals
+          secret:
+            secretName: {{ .Values.auth.principalsSecret.name }}
+        {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

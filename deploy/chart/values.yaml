@@ -1,0 +1,113 @@
+# Chart values of anvilkit-agent-api. Only what this service needs: its image,
+# its reviewed configuration file, the allowlisted placement overrides, probes
+# and resources. Environment values (addresses, replica counts, the principals
+# Secret name, the pinned image digest) are supplied by the deploying
+# repository per environment; secrets never enter this chart.
+
+image:
+  repository: anvilkit-agent-api
+  # tag defaults to the chart's appVersion; digest, when set, pins the exact
+  # image (repository@sha256:...) and takes precedence over the tag.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+replicaCount: 2
+
+serviceAccount:
+  create: true
+  name: ""
+  # The API needs no Kubernetes API access.
+  automountServiceAccountToken: false
+
+# The listener inside the Pod (ANVILKIT_API_LISTEN); the Service targets its port.
+listen:
+  address: 0.0.0.0
+  port: 9100
+
+# The Control gRPC endpoint (ANVILKIT_API_CONTROL_ADDRESS); required.
+control:
+  address: ""
+
+# The identity protocol (ANVILKIT_API_AUTH_MODE). Only the DEVELOPMENT_ONLY
+# "fixture" mode exists until ENV-07 supplies the IdP inputs; it reads the
+# principals file from an existing Secret that this chart never creates.
+auth:
+  mode: fixture
+  principalsSecret:
+    name: ""
+    key: principals.json
+
+# The reviewed, secret-free configuration file (services/agent/api config.yaml
+# sections): rendered into a ConfigMap and mounted at ANVILKIT_API_CONFIG.
+# Placement values above override it through the allowlisted environment.
+config:
+  http:
+    listen: 127.0.0.1:9100
+    read_header_timeout: 10s
+    body_limit_bytes: 262144
+    shutdown_timeout: 20s
+  control:
+    address: 127.0.0.1:9101
+  auth:
+    mode: fixture
+  sse:
+    heartbeat_interval: 15s
+    frame_buffer: 64
+    slow_consumer_grace: 5s
+    write_timeout: 10s
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# /healthz answers while the process runs; /readyz answers while new work can
+# be admitted (the readiness hook of the bootstrap).
+probes:
+  startup:
+    periodSeconds: 2
+    failureThreshold: 30
+  readiness:
+    periodSeconds: 5
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 10
+    failureThreshold: 3
+
+# Shutdown: Fx stops the listener with http.shutdown_timeout from the
+# configuration; the grace period must exceed it.
+terminationGracePeriodSeconds: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+topologySpreadConstraints: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
