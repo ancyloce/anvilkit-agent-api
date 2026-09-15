@@ -1,0 +1,132 @@
+// Package application holds the API's use-case layer: verified principals,
+// command identity derivation and the Control-facing port. It has no
+// business database and no Temporal, Pagix or provider client (architecture
+// communication matrix).
+package application
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+)
+
+var (
+	ErrUnauthenticated = errors.New("unauthenticated")
+	ErrForbidden       = errors.New("forbidden")
+)
+
+// Principal is the verified caller. Scope comes from here, never from a
+// request body or URL.
+type Principal struct {
+	TenantID  string
+	ProjectID string
+	ActorID   string
+	Roles     []string
+}
+
+// Verifier turns a bearer token into a Principal through the real identity
+// protocol (A12). The development fixture is one implementation.
+type Verifier interface {
+	Verify(ctx context.Context, bearer string) (Principal, error)
+}
+
+// CommandIdentity is the durable command identity the API derives from the
+// principal and the canonical request body.
+type CommandIdentity struct {
+	TenantID      string
+	CommandID     string
+	ActorID       string
+	RequestDigest string
+}
+
+// CanonicalDigest hashes the canonical JSON form of a decoded body (sorted
+// members, no insignificant whitespace) so a client retry with different
+// formatting still matches the original command.
+func CanonicalDigest(decoded any) (string, error) {
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(canonical)), nil
+}
+
+// OperationView is the public projection returned by the API; it mirrors
+// contracts/openapi/agent.yaml#/components/schemas/OperationView.
+type OperationView struct {
+	OperationID     string
+	TenantID        string
+	ProjectID       string
+	ActorID         string
+	Kind            string
+	ProfileID       string
+	SubjectDigest   string
+	BriefID         string
+	SourceRevision  string
+	Lifecycle       string
+	Phase           string
+	Control         string
+	Cleanup         string
+	Finance         string
+	Revision        string
+	CoveredEventSeq string
+	ExecutionEpoch  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Deadline        time.Time
+	FailureCode     string
+}
+
+type CommandReceipt struct {
+	CommandID         string
+	OperationID       string
+	Kind              string
+	Outcome           string
+	OperationRevision string
+	ReasonCode        string
+	AcceptedAt        time.Time
+	SettledAt         *time.Time
+}
+
+type EventFrame struct {
+	OperationID  string
+	EventSeq     string
+	TransitionID string
+	EventType    string
+	Revision     string
+	OccurredAt   time.Time
+	Lifecycle    string
+	Phase        string
+	Control      string
+	Cleanup      string
+	Finance      string
+	FailureCode  string
+}
+
+// ControlError carries the public error code decided by Control.
+type ControlError struct {
+	Code      string
+	Message   string
+	Retryable bool
+}
+
+func (e *ControlError) Error() string { return e.Code + ": " + e.Message }
+
+// Control is the port to anvilkit-agent-control's OperationService.
+type Control interface {
+	CreateOperation(ctx context.Context, cmd CommandIdentity, p Principal, kind string, profileID, subjectDigest, briefID, sourceRevision string) (OperationView, error)
+	GetOperation(ctx context.Context, p Principal, operationID string) (OperationView, error)
+	SubmitCommand(ctx context.Context, cmd CommandIdentity, p Principal, operationID, kind, expectedRevision, targetActivation string) (CommandReceipt, error)
+	GetCommand(ctx context.Context, p Principal, operationID, commandID string) (CommandReceipt, error)
+	// StreamEvents calls emit for every durable event after the cursor until
+	// the operation is terminal or ctx ends; a cursor that cannot be honored
+	// returns ErrResetRequired with the covered sequence.
+	StreamEvents(ctx context.Context, p Principal, operationID, afterSeq string, emit func(EventFrame) error) error
+}
+
+// ResetRequired tells the SSE handler to send a reset frame.
+type ResetRequired struct{ CoveredEventSeq string }
+
+func (r *ResetRequired) Error() string { return "reset required" }
