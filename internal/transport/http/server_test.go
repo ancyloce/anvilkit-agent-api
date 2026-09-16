@@ -17,9 +17,9 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 	httptransport "github.com/ancyloce/anvilkit-agent-api/internal/transport/http"
+	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 )
 
 // testOptions are the injected transport bounds of the in-process tests;

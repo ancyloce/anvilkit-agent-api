@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
+	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 )
 
 // strictHandlers implements the generated StrictServerInterface. Operations

@@ -20,8 +20,8 @@ import (
 	"github.com/gin-gonic/gin"
 	ginmiddleware "github.com/oapi-codegen/gin-middleware"
 
-	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
+	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 )
 
 const (
