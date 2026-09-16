@@ -60,11 +60,18 @@ type SSE struct {
 	WriteTimeout      time.Duration `koanf:"write_timeout"`
 }
 
+// Artifacts bounds the API's side of API-12: the deadline it sets on a
+// transfer it begins. Control bounds it further.
+type Artifacts struct {
+	TransferWindow time.Duration `koanf:"transfer_window"`
+}
+
 type Config struct {
-	HTTP    HTTP    `koanf:"http"`
-	Control Control `koanf:"control"`
-	Auth    Auth    `koanf:"auth"`
-	SSE     SSE     `koanf:"sse"`
+	HTTP      HTTP      `koanf:"http"`
+	Control   Control   `koanf:"control"`
+	Auth      Auth      `koanf:"auth"`
+	SSE       SSE       `koanf:"sse"`
+	Artifacts Artifacts `koanf:"artifacts"`
 }
 
 // defaults are the reviewed baseline values; the file and the allowed
@@ -78,6 +85,7 @@ var defaults = map[string]any{
 	"sse.frame_buffer":         64,
 	"sse.slow_consumer_grace":  "5s",
 	"sse.write_timeout":        "10s",
+	"artifacts.transfer_window": "15m",
 }
 
 // envOverrides is the complete set of environment variables the service
@@ -189,6 +197,9 @@ func (c Config) validate() error {
 	// otherwise the handler could block past the bound it promises.
 	if c.SSE.WriteTimeout > c.SSE.SlowConsumerGrace+c.SSE.HeartbeatInterval {
 		errs = append(errs, fmt.Errorf("sse.write_timeout %s must not exceed slow_consumer_grace + heartbeat_interval", c.SSE.WriteTimeout))
+	}
+	if c.Artifacts.TransferWindow < time.Minute || c.Artifacts.TransferWindow > 24*time.Hour {
+		errs = append(errs, fmt.Errorf("artifacts.transfer_window %s outside [1m, 24h]", c.Artifacts.TransferWindow))
 	}
 	return errors.Join(errs...)
 }
