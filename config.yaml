@@ -18,3 +18,7 @@ sse:
   frame_buffer: 64
   slow_consumer_grace: 5s
   write_timeout: 10s
+# artifacts: the deadline the API sets on an artifact transfer it begins
+# (API-12); Control bounds it further by the operation and attempt.
+artifacts:
+  transfer_window: 15m
