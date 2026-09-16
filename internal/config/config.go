@@ -77,14 +77,14 @@ type Config struct {
 // defaults are the reviewed baseline values; the file and the allowed
 // overrides refine them.
 var defaults = map[string]any{
-	"http.listen":              "127.0.0.1:9100",
-	"http.read_header_timeout": "10s",
-	"http.body_limit_bytes":    256 << 10,
-	"http.shutdown_timeout":    "20s",
-	"sse.heartbeat_interval":   "15s",
-	"sse.frame_buffer":         64,
-	"sse.slow_consumer_grace":  "5s",
-	"sse.write_timeout":        "10s",
+	"http.listen":               "127.0.0.1:9100",
+	"http.read_header_timeout":  "10s",
+	"http.body_limit_bytes":     256 << 10,
+	"http.shutdown_timeout":     "20s",
+	"sse.heartbeat_interval":    "15s",
+	"sse.frame_buffer":          64,
+	"sse.slow_consumer_grace":   "5s",
+	"sse.write_timeout":         "10s",
 	"artifacts.transfer_window": "15m",
 }
 
