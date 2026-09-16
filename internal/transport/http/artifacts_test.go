@@ -8,7 +8,7 @@ import (
 
 // API-12 over the transport: the authenticated caller begins a transfer
 // and receives the scoped capability (URL, method, signed headers) once;
-// the strict validator refuses classes outside the eight, numeric sizes
+// the strict validator refuses classes outside the contract, numeric sizes
 // and unknown members; the same command returns the original transfer; a
 // finalize names the handle and the uploaded object version, another
 // tenant's handle is not found, a verified mismatch is a rejection and a
@@ -22,8 +22,8 @@ func TestArtifactTransfers(t *testing.T) {
 	status, out, _ := do(t, ts, "POST", "/api/v1/artifacts/transfers", "", begin)
 	require.Equal(t, 401, status)
 
-	status, out, _ = do(t, ts, "POST", "/api/v1/artifacts/transfers", tokenA, `{"commandId":"x1","class":"npm","expectedDigest":"`+digest+`","expectedSize":"4096","mediaType":"text/plain"}`)
-	require.Equal(t, 400, status, "a class outside the eight is refused: %v", out)
+	status, out, _ = do(t, ts, "POST", "/api/v1/artifacts/transfers", tokenA, `{"commandId":"x1","class":"chunks","expectedDigest":"`+digest+`","expectedSize":"4096","mediaType":"text/plain"}`)
+	require.Equal(t, 400, status, "a class outside the contract's classes is refused: %v", out)
 	status, out, _ = do(t, ts, "POST", "/api/v1/artifacts/transfers", tokenA, `{"commandId":"x1","class":"prompt","expectedDigest":"`+digest+`","expectedSize":4096,"mediaType":"text/plain"}`)
 	require.Equal(t, 400, status, "a numeric size is refused: %v", out)
 	status, out, _ = do(t, ts, "POST", "/api/v1/artifacts/transfers", tokenA, `{"commandId":"x1","class":"prompt","expectedDigest":"`+digest+`","expectedSize":"4096","mediaType":"text/plain","objectKey":"leak"}`)

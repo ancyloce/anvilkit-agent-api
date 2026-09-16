@@ -204,6 +204,7 @@ var artifactClasses = map[string]controlv1.ArtifactClass{
 	"prompt": controlv1.ArtifactClass_ARTIFACT_CLASS_PROMPT, "brief": controlv1.ArtifactClass_ARTIFACT_CLASS_BRIEF, "source": controlv1.ArtifactClass_ARTIFACT_CLASS_SOURCE,
 	"stage": controlv1.ArtifactClass_ARTIFACT_CLASS_STAGE, "result": controlv1.ArtifactClass_ARTIFACT_CLASS_RESULT, "evidence": controlv1.ArtifactClass_ARTIFACT_CLASS_EVIDENCE,
 	"answer": controlv1.ArtifactClass_ARTIFACT_CLASS_ANSWER, "argument": controlv1.ArtifactClass_ARTIFACT_CLASS_ARGUMENT,
+	"npm": controlv1.ArtifactClass_ARTIFACT_CLASS_NPM, "browser": controlv1.ArtifactClass_ARTIFACT_CLASS_BROWSER, "css": controlv1.ArtifactClass_ARTIFACT_CLASS_CSS,
 }
 
 func toTransfer(t *controlv1.Transfer, upload *controlv1.TransferCapability) application.TransferView {
