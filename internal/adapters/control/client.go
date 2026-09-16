@@ -16,8 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	controlv1 "github.com/ancyloce/anvilkit-agent-contracts/go/anvilkit/control/v1"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
+	controlv1 "github.com/ancyloce/anvilkit-agent-contracts/go/anvilkit/control/v1"
 )
 
 type Client struct {
