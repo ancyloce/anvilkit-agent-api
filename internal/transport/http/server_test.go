@@ -59,15 +59,17 @@ func (verifier) Verify(_ context.Context, bearer string) (application.Principal,
 // fakeControl records what the API sends and answers like Control would for
 // the transport concerns under test; business rules are proven in Control.
 type fakeControl struct {
-	mu       sync.Mutex
-	commands map[string]application.CommandIdentity
-	ops      map[string]application.OperationView
-	events   map[string][]application.EventFrame
-	panicOn  string // operation id whose GetOperation panics (recovery test)
+	mu        sync.Mutex
+	commands  map[string]application.CommandIdentity
+	ops       map[string]application.OperationView
+	events    map[string][]application.EventFrame
+	transfers map[string]application.TransferView
+	handles   map[string]string
+	panicOn   string // operation id whose GetOperation panics (recovery test)
 }
 
 func newFake() *fakeControl {
-	return &fakeControl{commands: map[string]application.CommandIdentity{}, ops: map[string]application.OperationView{}, events: map[string][]application.EventFrame{}}
+	return &fakeControl{commands: map[string]application.CommandIdentity{}, ops: map[string]application.OperationView{}, events: map[string][]application.EventFrame{}, transfers: map[string]application.TransferView{}, handles: map[string]string{}}
 }
 
 func (f *fakeControl) CreateOperation(_ context.Context, cmd application.CommandIdentity, p application.Principal, kind, profileID, subjectDigest, briefID, sourceRevision string) (application.OperationView, error) {
@@ -126,6 +128,60 @@ func (f *fakeControl) SubmitCommand(_ context.Context, cmd application.CommandId
 
 func (f *fakeControl) GetCommand(context.Context, application.Principal, string, string) (application.CommandReceipt, error) {
 	return application.CommandReceipt{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+}
+
+// BeginTransfer answers like Control: the same command returns the original
+// transfer, a changed digest conflicts, and the capability is issued for a
+// begun transfer only.
+func (f *fakeControl) BeginTransfer(_ context.Context, cmd application.CommandIdentity, p application.Principal, intent application.TransferIntent) (application.TransferView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := cmd.TenantID + "/xfer/" + cmd.CommandID
+	if prev, ok := f.commands[key]; ok {
+		if prev.RequestDigest != cmd.RequestDigest {
+			return application.TransferView{}, &application.ControlError{Code: "IDEMPOTENCY_CONFLICT", Message: "changed digest"}
+		}
+		return f.transfers[key], nil
+	}
+	if intent.Deadline.Before(time.Now().Add(time.Minute)) {
+		return application.TransferView{}, &application.ControlError{Code: "INVALID_ARGUMENT", Message: "deadline too short"}
+	}
+	f.commands[key] = cmd
+	view := application.TransferView{
+		TransferID: "xfer_" + cmd.CommandID, Handle: "hdl_" + cmd.CommandID, Class: intent.Class, ExpectedDigest: intent.ExpectedDigest, ExpectedSize: intent.ExpectedSize,
+		State: "begun", Deadline: intent.Deadline.UTC().Truncate(time.Second),
+		Upload: &application.UploadCapability{URL: "https://artifacts.example.invalid/" + p.TenantID + "/xfer_" + cmd.CommandID + "?X-Amz-Signature=abc", Method: "PUT", Headers: map[string]string{"Content-Type": intent.MediaType, "Content-Length": intent.ExpectedSize}, ExpiresAt: intent.Deadline.UTC().Truncate(time.Second)},
+	}
+	if f.transfers == nil {
+		f.transfers = map[string]application.TransferView{}
+	}
+	f.transfers[key] = view
+	f.handles[view.Handle] = key
+	return view, nil
+}
+
+func (f *fakeControl) FinalizeTransfer(_ context.Context, cmd application.CommandIdentity, p application.Principal, handle, objectVersion string) (application.TransferView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, ok := f.handles[handle]
+	if !ok || !strings.HasPrefix(key, p.TenantID+"/") {
+		return application.TransferView{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+	}
+	view := f.transfers[key]
+	if view.State == "finalized" {
+		if view.ObjectVersion != objectVersion {
+			return application.TransferView{}, &application.ControlError{Code: "IDEMPOTENCY_CONFLICT", Message: "finalized at another version"}
+		}
+		return view, nil
+	}
+	if objectVersion == "partial" {
+		view.State, view.ReasonCode, view.Upload = "rejected", "SIZE_MISMATCH", nil
+		f.transfers[key] = view
+		return application.TransferView{}, &application.ControlError{Code: "INVALID_ARGUMENT", Message: "object holds 12 bytes, the transfer declared 4096"}
+	}
+	view.State, view.ObjectVersion, view.Upload = "finalized", objectVersion, nil
+	f.transfers[key] = view
+	return view, nil
 }
 
 // StreamEvents honors the cursor: only events after it are emitted, and a
@@ -198,6 +254,13 @@ const digest = "sha256:0dc7fa9db7237a2b5c96f70f59bb00f73bb86a0ca5554e91c312f9ada
 
 func createBody(commandID string) string {
 	return `{"commandId":"` + commandID + `","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"` + digest + `"}}`
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	require.NoError(t, err)
+	return string(raw)
 }
 
 func errorCode(out map[string]any) string {

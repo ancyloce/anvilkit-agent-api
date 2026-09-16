@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,6 +18,9 @@ import (
 // P15–P19 without changing the public contract.
 type strictHandlers struct {
 	control application.Control
+	// transferWindow is the reviewed deadline the API sets on a transfer
+	// it begins; Control bounds it further by the operation and attempt.
+	transferWindow time.Duration
 }
 
 func newRequestID() string {
@@ -122,11 +126,46 @@ func (h *strictHandlers) CreatePreparation(context.Context, agentapi.CreatePrepa
 func (h *strictHandlers) SubmitAnswer(context.Context, agentapi.SubmitAnswerRequestObject) (agentapi.SubmitAnswerResponseObject, error) {
 	return nil, notDeployed("preparation (P13)")
 }
-func (h *strictHandlers) BeginTransfer(context.Context, agentapi.BeginTransferRequestObject) (agentapi.BeginTransferResponseObject, error) {
-	return nil, notDeployed("artifact transfer (P08)")
+func transferToPublic(v application.TransferView) agentapi.Transfer {
+	out := agentapi.Transfer{
+		TransferId: v.TransferID, Handle: v.Handle, Class: agentapi.ArtifactClass(v.Class), ExpectedDigest: v.ExpectedDigest, ExpectedSize: v.ExpectedSize,
+		State: agentapi.TransferState(v.State), Deadline: v.Deadline.UTC(), ObjectVersion: optStr(v.ObjectVersion), ReasonCode: optStr(v.ReasonCode),
+	}
+	if v.Upload != nil {
+		method := agentapi.TransferUploadMethod(v.Upload.Method)
+		headers := v.Upload.Headers
+		expires := v.Upload.ExpiresAt.UTC()
+		out.UploadCapability, out.UploadMethod, out.UploadHeaders, out.UploadExpiresAt = optStr(v.Upload.URL), &method, &headers, &expires
+	}
+	return out
 }
-func (h *strictHandlers) FinalizeTransfer(context.Context, agentapi.FinalizeTransferRequestObject) (agentapi.FinalizeTransferResponseObject, error) {
-	return nil, notDeployed("artifact transfer (P08)")
+
+// BeginTransfer (API-12) begins a scoped transfer for the authenticated
+// principal: Control binds tenant, class, expected digest and size and the
+// deadline the API sets from its reviewed window. The authenticated caller
+// is a trusted flow and receives the upload capability; candidate code
+// never holds a token for this endpoint and only ever sees a handle.
+func (h *strictHandlers) BeginTransfer(ctx context.Context, req agentapi.BeginTransferRequestObject) (agentapi.BeginTransferResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	view, err := h.control.BeginTransfer(ctx, cmd, p, application.TransferIntent{
+		Class: string(req.Body.Class), MediaType: req.Body.MediaType, ExpectedDigest: req.Body.ExpectedDigest, ExpectedSize: req.Body.ExpectedSize,
+		OperationID: deref(req.Body.OperationId), AttemptID: deref(req.Body.AttemptId), Deadline: time.Now().Add(h.transferWindow),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.BeginTransfer201JSONResponse(transferToPublic(view)), nil
+}
+
+// FinalizeTransfer (API-12) asks Control to verify the object version the
+// caller uploaded; the answer carries no capability.
+func (h *strictHandlers) FinalizeTransfer(ctx context.Context, req agentapi.FinalizeTransferRequestObject) (agentapi.FinalizeTransferResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	view, err := h.control.FinalizeTransfer(ctx, cmd, p, req.Handle, req.Body.ObjectVersion)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.FinalizeTransfer200JSONResponse(transferToPublic(view)), nil
 }
 func (h *strictHandlers) Search(context.Context, agentapi.SearchRequestObject) (agentapi.SearchResponseObject, error) {
 	return nil, notDeployed("knowledge (P16)")
