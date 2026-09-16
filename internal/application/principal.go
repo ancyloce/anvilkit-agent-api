@@ -105,6 +105,46 @@ type EventFrame struct {
 	FailureCode  string
 }
 
+// TransferIntent is what a caller submits to begin a scoped artifact
+// transfer (API-12): the class, the exact bytes it will upload and the
+// operation or attempt the artifact belongs to. The deadline is set by the
+// API from its reviewed transfer window; Control bounds it further.
+type TransferIntent struct {
+	Class          string
+	MediaType      string
+	ExpectedDigest string
+	ExpectedSize   string
+	OperationID    string
+	AttemptID      string
+	Deadline       time.Time
+}
+
+// UploadCapability is the scoped upload authorization Control issued for
+// a begun transfer: one request of Method to URL with exactly Headers and
+// the declared bytes, valid until ExpiresAt. It is returned only to the
+// authenticated caller that began the transfer, never logged.
+type UploadCapability struct {
+	URL       string
+	Method    string
+	Headers   map[string]string
+	ExpiresAt time.Time
+}
+
+// TransferView is the public projection of a transfer; it mirrors
+// contracts/openapi/agent.yaml#/components/schemas/Transfer.
+type TransferView struct {
+	TransferID     string
+	Handle         string
+	Class          string
+	ExpectedDigest string
+	ExpectedSize   string
+	State          string
+	Deadline       time.Time
+	ObjectVersion  string
+	ReasonCode     string
+	Upload         *UploadCapability
+}
+
 // ControlError carries the public error code decided by Control.
 type ControlError struct {
 	Code      string
@@ -124,6 +164,10 @@ type Control interface {
 	// the operation is terminal or ctx ends; a cursor that cannot be honored
 	// returns ErrResetRequired with the covered sequence.
 	StreamEvents(ctx context.Context, p Principal, operationID, afterSeq string, emit func(EventFrame) error) error
+	// BeginTransfer and FinalizeTransfer are API-12 over Control's
+	// ArtifactService; the API never touches the object store itself.
+	BeginTransfer(ctx context.Context, cmd CommandIdentity, p Principal, intent TransferIntent) (TransferView, error)
+	FinalizeTransfer(ctx context.Context, cmd CommandIdentity, p Principal, handle, objectVersion string) (TransferView, error)
 }
 
 // ResetRequired tells the SSE handler to send a reset frame.
