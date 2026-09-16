@@ -34,7 +34,7 @@ docker build -t anvilkit-agent-api:dev .          # --build-arg GOPROXY=... GONO
 helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals
 ```
 
-The contract module is an ordinary published dependency: `github.com/ancyloce/anvilkit-agent-contracts/go v0.1.0` is the tag `go/v0.1.0` of the `anvilkit-agent-contracts` repository, served by `proxy.golang.org` and verified against the checksum database (`go.sum`: `h1:2vk5EHKnTRoCpW5EHeMGWzfCp//M5MQ+EDWxRlNqXKc=`; the zip includes that repository's root `LICENSE`, as Go requires for a module in a subdirectory). No replace directive, workspace or local proxy is involved; a newer contract version is adopted by changing the `require` line.
+The contract module is an ordinary published dependency: `github.com/ancyloce/anvilkit-agent-contracts/go v0.1.1` is the tag `go/v0.1.1` (commit `4025ff6`) of the `anvilkit-agent-contracts` repository, served by `proxy.golang.org` and verified against the checksum database (`go.sum`: `h1:w9BVVTxDkahXVUSwFrnDM1ZR+hbMGTFe/JkhATbGQhY=`; the zip includes that repository's root `LICENSE`, as Go requires for a module in a subdirectory). No replace directive, workspace or local proxy is involved; a newer contract version is adopted by changing the `require` line.
 
 ## Deploy
 

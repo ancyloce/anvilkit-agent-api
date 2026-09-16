@@ -3,7 +3,7 @@ module github.com/ancyloce/anvilkit-agent-api
 go 1.26.8
 
 require (
-	github.com/ancyloce/anvilkit-agent-contracts/go v0.1.0
+	github.com/ancyloce/anvilkit-agent-contracts/go v0.1.1
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/gin-contrib/sse v1.1.1
 	github.com/gin-gonic/gin v1.12.0
@@ -17,6 +17,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	go.uber.org/fx v1.24.0
 	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -64,5 +65,4 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )
