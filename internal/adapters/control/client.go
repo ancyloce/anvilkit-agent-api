@@ -14,14 +14,16 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	controlv1 "github.com/ancyloce/anvilkit-agent-contracts/go/anvilkit/control/v1"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 )
 
 type Client struct {
-	conn *grpc.ClientConn
-	ops  controlv1.OperationServiceClient
+	conn      *grpc.ClientConn
+	ops       controlv1.OperationServiceClient
+	artifacts controlv1.ArtifactServiceClient
 }
 
 func Dial(address string) (*Client, error) {
@@ -29,7 +31,7 @@ func Dial(address string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{conn: conn, ops: controlv1.NewOperationServiceClient(conn)}, nil
+	return &Client{conn: conn, ops: controlv1.NewOperationServiceClient(conn), artifacts: controlv1.NewArtifactServiceClient(conn)}, nil
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
@@ -194,4 +196,50 @@ func (c *Client) StreamEvents(ctx context.Context, p application.Principal, oper
 			return err
 		}
 	}
+}
+
+// ---- ArtifactService (API-12) ----
+
+var artifactClasses = map[string]controlv1.ArtifactClass{
+	"prompt": controlv1.ArtifactClass_ARTIFACT_CLASS_PROMPT, "brief": controlv1.ArtifactClass_ARTIFACT_CLASS_BRIEF, "source": controlv1.ArtifactClass_ARTIFACT_CLASS_SOURCE,
+	"stage": controlv1.ArtifactClass_ARTIFACT_CLASS_STAGE, "result": controlv1.ArtifactClass_ARTIFACT_CLASS_RESULT, "evidence": controlv1.ArtifactClass_ARTIFACT_CLASS_EVIDENCE,
+	"answer": controlv1.ArtifactClass_ARTIFACT_CLASS_ANSWER, "argument": controlv1.ArtifactClass_ARTIFACT_CLASS_ARGUMENT,
+}
+
+func toTransfer(t *controlv1.Transfer, upload *controlv1.TransferCapability) application.TransferView {
+	view := application.TransferView{
+		TransferID: t.GetTransferId(), Handle: t.GetHandle(), Class: enumWord(t.GetClass().String(), "ARTIFACT_CLASS_"), ExpectedDigest: t.GetExpectedDigest(),
+		ExpectedSize: t.GetExpectedSize(), State: enumWord(t.GetState().String(), "TRANSFER_STATE_"), Deadline: t.GetDeadline().AsTime(),
+		ObjectVersion: t.GetObjectVersion(), ReasonCode: t.GetReasonCode(),
+	}
+	if upload != nil && upload.GetUrl() != "" {
+		view.Upload = &application.UploadCapability{URL: upload.GetUrl(), Method: upload.GetMethod(), Headers: upload.GetHeaders(), ExpiresAt: upload.GetExpiresAt().AsTime()}
+	}
+	return view
+}
+
+func (c *Client) BeginTransfer(ctx context.Context, cmd application.CommandIdentity, p application.Principal, intent application.TransferIntent) (application.TransferView, error) {
+	req := &controlv1.BeginTransferRequest{
+		Command: command(cmd), Scope: scope(p), Class: artifactClasses[intent.Class], ExpectedDigest: intent.ExpectedDigest, ExpectedSize: intent.ExpectedSize,
+		MediaType: intent.MediaType, Deadline: timestamppb.New(intent.Deadline),
+	}
+	if intent.OperationID != "" {
+		req.OperationId = &intent.OperationID
+	}
+	if intent.AttemptID != "" {
+		req.AttemptId = &intent.AttemptID
+	}
+	resp, err := c.artifacts.BeginTransfer(ctx, req)
+	if err != nil {
+		return application.TransferView{}, mapErr(err)
+	}
+	return toTransfer(resp.GetTransfer(), resp.GetUpload()), nil
+}
+
+func (c *Client) FinalizeTransfer(ctx context.Context, cmd application.CommandIdentity, p application.Principal, handle, objectVersion string) (application.TransferView, error) {
+	resp, err := c.artifacts.FinalizeTransfer(ctx, &controlv1.FinalizeTransferRequest{Command: command(cmd), Handle: handle, ObjectVersion: objectVersion})
+	if err != nil {
+		return application.TransferView{}, mapErr(err)
+	}
+	return toTransfer(resp.GetTransfer(), nil), nil
 }
