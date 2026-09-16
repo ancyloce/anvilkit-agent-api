@@ -22,7 +22,7 @@ import (
 // injected options.
 func ServerOptions(cfg config.Config) httptransport.Options {
 	return httptransport.Options{
-		Listen: cfg.HTTP.Listen, ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, BodyLimitBytes: cfg.HTTP.BodyLimitBytes,
+		Listen: cfg.HTTP.Listen, ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, BodyLimitBytes: cfg.HTTP.BodyLimitBytes, TransferWindow: cfg.Artifacts.TransferWindow,
 		Stream: httptransport.StreamBounds{
 			HeartbeatInterval: cfg.SSE.HeartbeatInterval, FrameBuffer: cfg.SSE.FrameBuffer,
 			SlowConsumerGrace: cfg.SSE.SlowConsumerGrace, WriteTimeout: cfg.SSE.WriteTimeout,
