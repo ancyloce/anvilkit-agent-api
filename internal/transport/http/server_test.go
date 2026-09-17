@@ -97,6 +97,43 @@ func (f *fakeControl) CreateOperation(_ context.Context, cmd application.Command
 	return view, nil
 }
 
+// CreatePreparation records the intake as a preparation operation whose
+// projection carries an open question set, so the public clarification
+// projection and API-06 are exercised over the fake.
+func (f *fakeControl) CreatePreparation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, profileID, subjectDigest string, intake application.PreparationIntake) (application.OperationView, error) {
+	view, err := f.CreateOperation(ctx, cmd, p, "preparation", profileID, subjectDigest, "", "")
+	if err != nil {
+		return view, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if intake.PromptTransferID == "" {
+		return application.OperationView{}, &application.ControlError{Code: "INVALID_ARGUMENT", Message: "prompt required"}
+	}
+	key := cmd.TenantID + "/" + cmd.CommandID
+	view.Lifecycle, view.Phase = "waiting", "awaiting_input"
+	view.Clarification = &application.Clarification{QuestionSetID: "qs_" + cmd.CommandID, QuestionSetRevision: "1", Round: "1", AskedAt: view.CreatedAt, ExpiresAt: view.CreatedAt.Add(7 * 24 * time.Hour), Questions: []application.Question{{QuestionID: "q1", Text: "Which call to action?"}}}
+	f.ops[key] = view
+	return view, nil
+}
+
+func (f *fakeControl) SubmitAnswer(_ context.Context, cmd application.CommandIdentity, p application.Principal, operationID, questionSetID, questionSetRevision, transferID, digest string) (application.AnswerReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, v := range f.ops {
+		if v.OperationID == operationID && v.TenantID == p.TenantID {
+			if v.Clarification == nil || v.Clarification.QuestionSetID != questionSetID {
+				return application.AnswerReceipt{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+			}
+			if v.Clarification.QuestionSetRevision != questionSetRevision {
+				return application.AnswerReceipt{}, &application.ControlError{Code: "REVISION_CONFLICT", Message: "stale question set revision"}
+			}
+			return application.AnswerReceipt{AnswerID: "ans_" + cmd.CommandID, OperationID: operationID, QuestionSetID: questionSetID, QuestionSetRevision: questionSetRevision, UpdateID: "ans_" + cmd.CommandID, AcceptedAt: v.CreatedAt}, nil
+		}
+	}
+	return application.AnswerReceipt{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+}
+
 func (f *fakeControl) GetOperation(_ context.Context, p application.Principal, id string) (application.OperationView, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

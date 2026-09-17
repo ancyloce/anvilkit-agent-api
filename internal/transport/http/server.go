@@ -41,6 +41,9 @@ type Options struct {
 	// TransferWindow is the deadline the API sets on an artifact transfer it
 	// begins (API-12); Control bounds it by the operation and attempt.
 	TransferWindow time.Duration
+	// PreparationProfile is the reviewed operation profile API-01 accepts
+	// a prompt into.
+	PreparationProfile string
 }
 
 // StreamBounds limits the SSE transport (contracts.md §6 "bounded
@@ -107,7 +110,11 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	if window <= 0 {
 		window = 15 * time.Minute
 	}
-	handlers := agentapi.NewStrictHandlerWithOptions(&strictHandlers{control: control, transferWindow: window}, nil, agentapi.StrictGinServerOptions{
+	prepProfile := opts.PreparationProfile
+	if prepProfile == "" {
+		prepProfile = "preparation-v1"
+	}
+	handlers := agentapi.NewStrictHandlerWithOptions(&strictHandlers{control: control, transferWindow: window, preparationProfile: prepProfile}, nil, agentapi.StrictGinServerOptions{
 		RequestErrorHandlerFunc:  func(c *gin.Context, err error) { fail(c, invalidArgument(err.Error())) },
 		HandlerErrorFunc:         func(c *gin.Context, err error) { fail(c, fromControl(err)) },
 		ResponseErrorHandlerFunc: func(c *gin.Context, err error) { fail(c, fromControl(err)) },

@@ -21,6 +21,8 @@ type strictHandlers struct {
 	// transferWindow is the reviewed deadline the API sets on a transfer
 	// it begins; Control bounds it further by the operation and attempt.
 	transferWindow time.Duration
+	// preparationProfile is the reviewed operation profile of API-01.
+	preparationProfile string
 }
 
 func newRequestID() string {
@@ -58,6 +60,17 @@ func viewToPublic(v application.OperationView) agentapi.OperationView {
 		Lifecycle: agentapi.Lifecycle(v.Lifecycle), Phase: v.Phase, Control: agentapi.ControlState(v.Control), Cleanup: agentapi.CleanupState(v.Cleanup),
 		Finance: agentapi.FinanceState(v.Finance), Revision: v.Revision, CoveredEventSeq: v.CoveredEventSeq, ExecutionEpoch: v.ExecutionEpoch,
 		CreatedAt: v.CreatedAt.UTC(), UpdatedAt: v.UpdatedAt.UTC(), Deadline: v.Deadline.UTC(), FailureCode: optStr(v.FailureCode), ProjectId: optStr(v.ProjectID),
+	}
+	if v.ActiveDeadline != nil {
+		t := v.ActiveDeadline.UTC()
+		out.ActiveDeadline = &t
+	}
+	if c := v.Clarification; c != nil {
+		questions := make([]agentapi.Question, 0, len(c.Questions))
+		for _, q := range c.Questions {
+			questions = append(questions, agentapi.Question{QuestionId: q.QuestionID, Text: q.Text})
+		}
+		out.Clarification = &agentapi.Clarification{QuestionSetId: c.QuestionSetID, QuestionSetRevision: c.QuestionSetRevision, Round: c.Round, AskedAt: c.AskedAt.UTC(), ExpiresAt: c.ExpiresAt.UTC(), Questions: questions}
 	}
 	return out
 }
@@ -120,11 +133,46 @@ func notDeployed(service string) error {
 	return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " is not deployed in this unit", Retryable: false}
 }
 
-func (h *strictHandlers) CreatePreparation(context.Context, agentapi.CreatePreparationRequestObject) (agentapi.CreatePreparationResponseObject, error) {
-	return nil, notDeployed("preparation (P13)")
+// CreatePreparation (API-01) accepts a prompt artifact and the selected
+// references into a Preparation: the subject digest is the canonical
+// digest of the intake (the same intake under another command is the
+// same subject; Control deduplicates the command), the profile is the
+// reviewed preparation profile of this deployment.
+func (h *strictHandlers) CreatePreparation(ctx context.Context, req agentapi.CreatePreparationRequestObject) (agentapi.CreatePreparationResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	intake := application.PreparationIntake{PromptTransferID: req.Body.Prompt.TransferId, PromptDigest: req.Body.Prompt.Digest}
+	if req.Body.BrandReferences != nil {
+		for _, r := range *req.Body.BrandReferences {
+			intake.BrandReferences = append(intake.BrandReferences, application.SourceReference{SourceID: r.SourceId, Revision: r.Revision})
+		}
+	}
+	if req.Body.AssetReferences != nil {
+		for _, r := range *req.Body.AssetReferences {
+			intake.AssetReferences = append(intake.AssetReferences, application.SourceReference{SourceID: r.SourceId, Revision: r.Revision})
+		}
+	}
+	subject, err := application.CanonicalDigest(map[string]any{"prompt": req.Body.Prompt, "brandReferences": req.Body.BrandReferences, "assetReferences": req.Body.AssetReferences})
+	if err != nil {
+		return nil, err
+	}
+	view, err := h.control.CreatePreparation(ctx, cmd, p, h.preparationProfile, subject, intake)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.CreatePreparation202JSONResponse(viewToPublic(view)), nil
 }
-func (h *strictHandlers) SubmitAnswer(context.Context, agentapi.SubmitAnswerRequestObject) (agentapi.SubmitAnswerResponseObject, error) {
-	return nil, notDeployed("preparation (P13)")
+
+// SubmitAnswer (API-06) commits an answer bound to the current question
+// set revision; Control relays one tracked Update.
+func (h *strictHandlers) SubmitAnswer(ctx context.Context, req agentapi.SubmitAnswerRequestObject) (agentapi.SubmitAnswerResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	r, err := h.control.SubmitAnswer(ctx, cmd, p, req.OperationId, req.Body.QuestionSetId, req.Body.QuestionSetRevision, req.Body.Answer.TransferId, req.Body.Answer.Digest)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.SubmitAnswer202JSONResponse(agentapi.AnswerReceipt{
+		AnswerId: r.AnswerID, OperationId: r.OperationID, QuestionSetId: r.QuestionSetID, QuestionSetRevision: r.QuestionSetRevision, UpdateId: r.UpdateID, AcceptedAt: r.AcceptedAt.UTC(),
+	}), nil
 }
 func transferToPublic(v application.TransferView) agentapi.Transfer {
 	out := agentapi.Transfer{
