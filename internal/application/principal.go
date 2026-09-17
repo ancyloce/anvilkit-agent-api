@@ -77,6 +77,50 @@ type OperationView struct {
 	UpdatedAt       time.Time
 	Deadline        time.Time
 	FailureCode     string
+	// ActiveDeadline is set once by the first execution permit of a
+	// generation; nil until then.
+	ActiveDeadline *time.Time
+	// Clarification is the open question set of a waiting preparation.
+	Clarification *Clarification
+}
+
+// Clarification mirrors agent.yaml#/components/schemas/Clarification.
+type Clarification struct {
+	QuestionSetID       string
+	QuestionSetRevision string
+	Round               string
+	AskedAt             time.Time
+	ExpiresAt           time.Time
+	Questions           []Question
+}
+
+type Question struct {
+	QuestionID string
+	Text       string
+}
+
+// PreparationIntake is what API-01 accepts: the prompt artifact and the
+// selected brand/asset references.
+type PreparationIntake struct {
+	PromptTransferID string
+	PromptDigest     string
+	BrandReferences  []SourceReference
+	AssetReferences  []SourceReference
+}
+
+type SourceReference struct {
+	SourceID string
+	Revision string
+}
+
+// AnswerReceipt mirrors agent.yaml#/components/schemas/AnswerReceipt.
+type AnswerReceipt struct {
+	AnswerID            string
+	OperationID         string
+	QuestionSetID       string
+	QuestionSetRevision string
+	UpdateID            string
+	AcceptedAt          time.Time
 }
 
 type CommandReceipt struct {
@@ -157,6 +201,12 @@ func (e *ControlError) Error() string { return e.Code + ": " + e.Message }
 // Control is the port to anvilkit-agent-control's OperationService.
 type Control interface {
 	CreateOperation(ctx context.Context, cmd CommandIdentity, p Principal, kind string, profileID, subjectDigest, briefID, sourceRevision string) (OperationView, error)
+	// CreatePreparation is API-01 over Control's OperationService: the
+	// reviewed preparation profile, the subject digest derived from the
+	// canonical intake, and the intake itself.
+	CreatePreparation(ctx context.Context, cmd CommandIdentity, p Principal, profileID, subjectDigest string, intake PreparationIntake) (OperationView, error)
+	// SubmitAnswer is API-06 over Control's PreparationService.
+	SubmitAnswer(ctx context.Context, cmd CommandIdentity, p Principal, operationID, questionSetID, questionSetRevision, transferID, digest string) (AnswerReceipt, error)
 	GetOperation(ctx context.Context, p Principal, operationID string) (OperationView, error)
 	SubmitCommand(ctx context.Context, cmd CommandIdentity, p Principal, operationID, kind, expectedRevision, targetActivation string) (CommandReceipt, error)
 	GetCommand(ctx context.Context, p Principal, operationID, commandID string) (CommandReceipt, error)
