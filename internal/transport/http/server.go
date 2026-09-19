@@ -78,6 +78,9 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	}
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
+	// Generated strict handlers receive *gin.Context as context.Context.
+	// Delegate cancellation and deadlines to the incoming HTTP request.
+	engine.ContextWithFallback = true
 	// Errors are collected with c.Error and rendered once by errorEnvelope,
 	// which is registered first so it runs last; a panic becomes the same
 	// envelope through Gin's recovery.

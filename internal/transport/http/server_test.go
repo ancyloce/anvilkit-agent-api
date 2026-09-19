@@ -581,3 +581,53 @@ func TestStartBindsTheListenerBeforeReportingStarted(t *testing.T) {
 	require.NoError(t, err, "the port is released after shutdown")
 	released.Close()
 }
+
+type contextControl struct {
+	*fakeControl
+	seen chan context.Context
+}
+
+func (f *contextControl) GetOperation(ctx context.Context, _ application.Principal, _ string) (application.OperationView, error) {
+	f.seen <- ctx
+	select {
+	case <-ctx.Done():
+		return application.OperationView{}, ctx.Err()
+	case <-time.After(200 * time.Millisecond):
+		return application.OperationView{}, context.DeadlineExceeded
+	}
+}
+func TestHTTPContextReachesControl(t *testing.T) {
+	for _, mode := range []string{"cancel", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &contextControl{fakeControl: newFake(), seen: make(chan context.Context, 1)}
+			accepted, err := fake.fakeControl.CreateOperation(context.Background(), application.CommandIdentity{TenantID: "tenant_a", CommandID: "accepted"}, application.Principal{TenantID: "tenant_a", ActorID: "user_a"}, "local_check", "local-check-v1", digest, "", "")
+			require.NoError(t, err)
+			srv, err := httptransport.NewServer(testOptions(), verifier{}, fake, func(context.Context) error { return nil })
+			require.NoError(t, err)
+			duration := time.Second
+			if mode == "deadline" {
+				duration = 40 * time.Millisecond
+			}
+			parent, cancel := context.WithTimeout(context.Background(), duration)
+			defer cancel()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/"+accepted.OperationID, nil).WithContext(parent)
+			req.Header.Set("Authorization", "Bearer token-tenant-a-0123456789")
+			done := make(chan struct{})
+			go func() { defer close(done); srv.Handler().ServeHTTP(httptest.NewRecorder(), req) }()
+			forwarded := <-fake.seen
+			deadline, ok := forwarded.Deadline()
+			require.True(t, ok)
+			want, _ := parent.Deadline()
+			require.Equal(t, want, deadline)
+			if mode == "cancel" {
+				cancel()
+			}
+			require.Eventually(t, func() bool { return forwarded.Err() != nil }, 100*time.Millisecond, time.Millisecond)
+			if mode == "deadline" {
+				require.ErrorIs(t, forwarded.Err(), context.DeadlineExceeded)
+			}
+			<-done
+			require.Len(t, fake.events[accepted.OperationID], 2, "ending the HTTP wait must not issue a business cancellation")
+		})
+	}
+}
