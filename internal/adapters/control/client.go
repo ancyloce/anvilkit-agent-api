@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -28,11 +29,19 @@ type Client struct {
 }
 
 func Dial(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithUnaryInterceptor(boundRPCWait))
 	if err != nil {
 		return nil, err
 	}
 	return &Client{conn: conn, ops: controlv1.NewOperationServiceClient(conn), artifacts: controlv1.NewArtifactServiceClient(conn), preparations: controlv1.NewPreparationServiceClient(conn)}, nil
+}
+
+// Bound transport waiting. WithTimeout preserves an earlier caller deadline;
+// ending this wait never issues a business cancellation command.
+func boundRPCWait(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return invoke(bounded, method, req, reply, cc, opts...)
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
