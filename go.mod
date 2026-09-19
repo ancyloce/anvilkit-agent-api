@@ -3,7 +3,7 @@ module github.com/ancyloce/anvilkit-agent-api
 go 1.26.8
 
 require (
-	github.com/ancyloce/anvilkit-agent-contracts/go v0.1.3-0.20260917133639-1e7cb5d5c537
+	github.com/ancyloce/anvilkit-agent-contracts/go v0.1.3
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/gin-contrib/sse v1.1.1
 	github.com/gin-gonic/gin v1.12.0
