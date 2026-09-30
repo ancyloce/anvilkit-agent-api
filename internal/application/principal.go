@@ -53,6 +53,9 @@ func CanonicalDigest(decoded any) (string, error) {
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(canonical)), nil
 }
 
+// DigestBytes is the SHA-256 of exact bytes in the contract's form.
+func DigestBytes(b []byte) string { return fmt.Sprintf("sha256:%x", sha256.Sum256(b)) }
+
 // OperationView is the public projection returned by the API; it mirrors
 // contracts/openapi/agent.yaml#/components/schemas/OperationView.
 type OperationView struct {
@@ -65,6 +68,7 @@ type OperationView struct {
 	SubjectDigest   string
 	BriefID         string
 	SourceRevision  string
+	SourceHandle    string
 	Lifecycle       string
 	Phase           string
 	Control         string
@@ -200,7 +204,7 @@ func (e *ControlError) Error() string { return e.Code + ": " + e.Message }
 
 // Control is the port to anvilkit-agent-control's OperationService.
 type Control interface {
-	CreateOperation(ctx context.Context, cmd CommandIdentity, p Principal, kind string, profileID, subjectDigest, briefID, sourceRevision string) (OperationView, error)
+	CreateOperation(ctx context.Context, cmd CommandIdentity, p Principal, kind string, subject OperationSubject) (OperationView, error)
 	// CreatePreparation is API-01 over Control's OperationService: the
 	// reviewed preparation profile, the subject digest derived from the
 	// canonical intake, and the intake itself.
@@ -218,6 +222,24 @@ type Control interface {
 	// ArtifactService; the API never touches the object store itself.
 	BeginTransfer(ctx context.Context, cmd CommandIdentity, p Principal, intent TransferIntent) (TransferView, error)
 	FinalizeTransfer(ctx context.Context, cmd CommandIdentity, p Principal, handle, objectVersion string) (TransferView, error)
+	// GetPreview reads the committed preview of a preview_build operation of
+	// the principal's tenant (P20); ReadPreviewArtifact returns the exact
+	// bytes of its module or one stylesheet through Control's one-GET read
+	// capability, verified against the recorded digest and size.
+	GetPreview(ctx context.Context, p Principal, operationID string) (PreviewView, error)
+	ReadPreviewArtifact(ctx context.Context, p Principal, operationID, digest string) (PreviewBytes, error)
+	// ReadSource returns the verified source archive a workbench edits.
+	ReadSource(ctx context.Context, p Principal, operationID string) (SourceBytes, error)
+}
+
+// OperationSubject is what API-02 binds an operation to; SourceHandle is
+// the edited source artifact of a preview_build.
+type OperationSubject struct {
+	ProfileID      string
+	SubjectDigest  string
+	BriefID        string
+	SourceRevision string
+	SourceHandle   string
 }
 
 // ResetRequired tells the SSE handler to send a reset frame.
