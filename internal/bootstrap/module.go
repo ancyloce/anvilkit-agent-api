@@ -13,6 +13,8 @@ import (
 
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/control"
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/fixtureauth"
+	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/knowledge"
+	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/mcp"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 	"github.com/ancyloce/anvilkit-agent-api/internal/config"
 	httptransport "github.com/ancyloce/anvilkit-agent-api/internal/transport/http"
@@ -44,12 +46,40 @@ func Module() fx.Option {
 			},
 			func(cfg config.Config) (*control.Client, error) { return control.Dial(cfg.Control.Address) },
 			func(c *control.Client) application.Control { return c },
-			func(cfg config.Config, v application.Verifier, ctl application.Control) (*httptransport.Server, error) {
-				return httptransport.NewServer(ServerOptions(cfg), v, ctl, func(context.Context) error { return nil })
+			newGateways,
+			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways) (*httptransport.Server, error) {
+				return httptransport.NewServer(ServerOptions(cfg), v, ctl, gw, func(context.Context) error { return nil })
 			},
 		),
 		fx.Invoke(run),
 	)
+}
+
+// newGateways dials the placed owners (plaintext DEVELOPMENT_ONLY; mTLS is
+// ENV-03) and closes them on stop; an unplaced owner stays unavailable.
+func newGateways(lc fx.Lifecycle, cfg config.Config, log *slog.Logger) (httptransport.Gateways, error) {
+	var gw httptransport.Gateways
+	if cfg.Knowledge.Address != "" {
+		k, err := knowledge.Dial(cfg.Knowledge.Address, cfg.Knowledge.Timeout)
+		if err != nil {
+			return gw, err
+		}
+		lc.Append(fx.Hook{OnStop: func(context.Context) error { return k.Close() }})
+		gw.Knowledge = k
+	} else {
+		log.Warn("no knowledge placement: API-07/08/09/13/14 answer DEPENDENCY_UNAVAILABLE (knowledge.address unset)")
+	}
+	if cfg.MCP.Address != "" {
+		m, err := mcp.Dial(cfg.MCP.Address, cfg.MCP.Timeout)
+		if err != nil {
+			return gw, err
+		}
+		lc.Append(fx.Hook{OnStop: func(context.Context) error { return m.Close() }})
+		gw.MCP = m
+	} else {
+		log.Warn("no mcp placement: API-10/11/15/16 answer DEPENDENCY_UNAVAILABLE (mcp.address unset)")
+	}
+	return gw, nil
 }
 
 // run binds the listener inside OnStart, so Fx reports a failed bind as a
