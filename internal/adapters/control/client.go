@@ -74,7 +74,7 @@ func toView(v *controlv1.OperationView) application.OperationView {
 	out := application.OperationView{
 		OperationID: v.GetOperationId(), TenantID: v.GetTenantId(), ProjectID: v.GetProjectId(), ActorID: v.GetActorId(),
 		Kind: enumWord(v.GetKind().String(), "OPERATION_KIND_"), ProfileID: v.GetSubject().GetProfileId(), SubjectDigest: v.GetSubject().GetSubjectDigest(),
-		BriefID: v.GetSubject().GetBriefId(), SourceRevision: v.GetSubject().GetSourceRevision(),
+		BriefID: v.GetSubject().GetBriefId(), SourceRevision: v.GetSubject().GetSourceRevision(), SourceHandle: v.GetSubject().GetSourceHandle(),
 		Lifecycle: enumWord(v.GetLifecycle().String(), "LIFECYCLE_"), Phase: v.GetPhase(), Control: enumWord(v.GetControl().String(), "CONTROL_STATE_"),
 		Cleanup: enumWord(v.GetCleanup().String(), "CLEANUP_STATE_"), Finance: enumWord(v.GetFinance().String(), "FINANCE_STATE_"),
 		Revision: v.GetRevision(), CoveredEventSeq: v.GetCoveredEventSeq(), ExecutionEpoch: v.GetExecutionEpoch(),
@@ -138,13 +138,23 @@ func toReceipt(r *controlv1.CommandReceipt) application.CommandReceipt {
 }
 
 // mapErr turns a gRPC status into the public error code (contracts.md §4).
-func mapErr(err error) error {
+func mapErr(err error) error { return MapError(err, "control") }
+
+// publicConflicts are the precondition codes of the public error contract.
+var publicConflicts = map[string]bool{
+	"REVISION_CONFLICT": true, "IDEMPOTENCY_CONFLICT": true, "STALE_EXECUTION": true, "PROFILE_UNQUALIFIED": true,
+	"BUDGET_EXHAUSTED": true, "CAPACITY_EXHAUSTED": true, "EFFECT_UNCERTAIN": true,
+}
+
+// MapError maps a gRPC status of an owning service (Control, Knowledge,
+// MCP) to the public error envelope's code.
+func MapError(err error, service string) error {
 	if err == nil {
 		return nil
 	}
 	st, ok := status.FromError(err)
 	if !ok {
-		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: "control unavailable", Retryable: true}
+		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " unavailable", Retryable: true}
 	}
 	code, _, _ := strings.Cut(st.Message(), ":")
 	switch st.Code() {
@@ -153,31 +163,40 @@ func mapErr(err error) error {
 	case codes.InvalidArgument:
 		return &application.ControlError{Code: "INVALID_ARGUMENT", Message: st.Message(), Retryable: false}
 	case codes.Aborted, codes.FailedPrecondition:
-		if code == "" {
+		// Only the contract's codes cross the boundary; an owner's own code
+		// (DESCRIPTOR_MISMATCH, ...) stays in the message of a conflict.
+		if !publicConflicts[code] {
 			code = "REVISION_CONFLICT"
 		}
 		return &application.ControlError{Code: code, Message: st.Message(), Retryable: false}
+	case codes.PermissionDenied, codes.Unauthenticated:
+		return &application.ControlError{Code: "FORBIDDEN", Message: st.Message(), Retryable: false}
+	case codes.AlreadyExists:
+		return &application.ControlError{Code: "IDEMPOTENCY_CONFLICT", Message: st.Message(), Retryable: false}
 	case codes.ResourceExhausted:
 		return &application.ControlError{Code: "CAPACITY_EXHAUSTED", Message: st.Message(), Retryable: true}
 	case codes.Unavailable:
 		if code == "EFFECT_UNCERTAIN" {
 			return &application.ControlError{Code: "EFFECT_UNCERTAIN", Message: st.Message(), Retryable: true}
 		}
-		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: "control unavailable", Retryable: true}
+		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " unavailable", Retryable: true}
 	case codes.Canceled, codes.DeadlineExceeded:
-		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: "control call ended", Retryable: true}
+		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " call ended", Retryable: true}
 	default:
-		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: "control error", Retryable: true}
+		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " error", Retryable: true}
 	}
 }
 
-func (c *Client) CreateOperation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, kind, profileID, subjectDigest, briefID, sourceRevision string) (application.OperationView, error) {
-	subject := &controlv1.OperationSubject{ProfileId: profileID, SubjectDigest: subjectDigest}
-	if briefID != "" {
-		subject.BriefId = &briefID
+func (c *Client) CreateOperation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, kind string, s application.OperationSubject) (application.OperationView, error) {
+	subject := &controlv1.OperationSubject{ProfileId: s.ProfileID, SubjectDigest: s.SubjectDigest}
+	if s.BriefID != "" {
+		subject.BriefId = &s.BriefID
 	}
-	if sourceRevision != "" {
-		subject.SourceRevision = &sourceRevision
+	if s.SourceRevision != "" {
+		subject.SourceRevision = &s.SourceRevision
+	}
+	if s.SourceHandle != "" {
+		subject.SourceHandle = &s.SourceHandle
 	}
 	resp, err := c.ops.CreateOperation(ctx, &controlv1.CreateOperationRequest{Command: command(cmd), Scope: scope(p), Kind: kinds[kind], Subject: subject})
 	if err != nil {
