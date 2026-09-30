@@ -11,6 +11,13 @@ http:
   shutdown_timeout: 20s
 control:
   address: 127.0.0.1:9101
+# knowledge / mcp (P20): the owners API-07..API-16 route to. Their addresses
+# are placements (ANVILKIT_API_KNOWLEDGE_ADDRESS, ANVILKIT_API_MCP_ADDRESS);
+# without one the owner's endpoints answer DEPENDENCY_UNAVAILABLE.
+knowledge:
+  timeout: 30s
+mcp:
+  timeout: 60s
 auth:
   mode: fixture
 sse:
