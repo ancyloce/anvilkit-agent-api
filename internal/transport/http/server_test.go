@@ -66,13 +66,16 @@ type fakeControl struct {
 	transfers map[string]application.TransferView
 	handles   map[string]string
 	panicOn   string // operation id whose GetOperation panics (recovery test)
+	previews  map[string]application.PreviewView
+	artifacts map[string]application.PreviewBytes
 }
 
 func newFake() *fakeControl {
-	return &fakeControl{commands: map[string]application.CommandIdentity{}, ops: map[string]application.OperationView{}, events: map[string][]application.EventFrame{}, transfers: map[string]application.TransferView{}, handles: map[string]string{}}
+	return &fakeControl{commands: map[string]application.CommandIdentity{}, ops: map[string]application.OperationView{}, events: map[string][]application.EventFrame{}, transfers: map[string]application.TransferView{}, handles: map[string]string{}, previews: map[string]application.PreviewView{}, artifacts: map[string]application.PreviewBytes{}}
 }
 
-func (f *fakeControl) CreateOperation(_ context.Context, cmd application.CommandIdentity, p application.Principal, kind, profileID, subjectDigest, briefID, sourceRevision string) (application.OperationView, error) {
+func (f *fakeControl) CreateOperation(_ context.Context, cmd application.CommandIdentity, p application.Principal, kind string, subject application.OperationSubject) (application.OperationView, error) {
+	profileID, subjectDigest := subject.ProfileID, subject.SubjectDigest
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := cmd.TenantID + "/" + cmd.CommandID
@@ -101,7 +104,7 @@ func (f *fakeControl) CreateOperation(_ context.Context, cmd application.Command
 // projection carries an open question set, so the public clarification
 // projection and API-06 are exercised over the fake.
 func (f *fakeControl) CreatePreparation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, profileID, subjectDigest string, intake application.PreparationIntake) (application.OperationView, error) {
-	view, err := f.CreateOperation(ctx, cmd, p, "preparation", profileID, subjectDigest, "", "")
+	view, err := f.CreateOperation(ctx, cmd, p, "preparation", application.OperationSubject{ProfileID: profileID, SubjectDigest: subjectDigest})
 	if err != nil {
 		return view, err
 	}
@@ -262,7 +265,7 @@ func (f *fakeControl) StreamEvents(ctx context.Context, p application.Principal,
 func newServer(t *testing.T) (*httptest.Server, *fakeControl) {
 	t.Helper()
 	fake := newFake()
-	srv, err := httptransport.NewServer(testOptions(), verifier{}, fake, func(context.Context) error { return nil })
+	srv, err := httptransport.NewServer(testOptions(), verifier{}, fake, httptransport.Gateways{}, func(context.Context) error { return nil })
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -540,7 +543,7 @@ func TestStartBindsTheListenerBeforeReportingStarted(t *testing.T) {
 	newAt := func(listen string) *httptransport.Server {
 		opts := testOptions()
 		opts.Listen = listen
-		srv, err := httptransport.NewServer(opts, verifier{}, newFake(), func(context.Context) error { return nil })
+		srv, err := httptransport.NewServer(opts, verifier{}, newFake(), httptransport.Gateways{}, func(context.Context) error { return nil })
 		require.NoError(t, err)
 		return srv
 	}
@@ -600,9 +603,9 @@ func TestHTTPContextReachesControl(t *testing.T) {
 	for _, mode := range []string{"cancel", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			fake := &contextControl{fakeControl: newFake(), seen: make(chan context.Context, 1)}
-			accepted, err := fake.fakeControl.CreateOperation(context.Background(), application.CommandIdentity{TenantID: "tenant_a", CommandID: "accepted"}, application.Principal{TenantID: "tenant_a", ActorID: "user_a"}, "local_check", "local-check-v1", digest, "", "")
+			accepted, err := fake.fakeControl.CreateOperation(context.Background(), application.CommandIdentity{TenantID: "tenant_a", CommandID: "accepted"}, application.Principal{TenantID: "tenant_a", ActorID: "user_a"}, "local_check", application.OperationSubject{ProfileID: "local-check-v1", SubjectDigest: digest})
 			require.NoError(t, err)
-			srv, err := httptransport.NewServer(testOptions(), verifier{}, fake, func(context.Context) error { return nil })
+			srv, err := httptransport.NewServer(testOptions(), verifier{}, fake, httptransport.Gateways{}, func(context.Context) error { return nil })
 			require.NoError(t, err)
 			duration := time.Second
 			if mode == "deadline" {
@@ -630,4 +633,31 @@ func TestHTTPContextReachesControl(t *testing.T) {
 			require.Len(t, fake.events[accepted.OperationID], 2, "ending the HTTP wait must not issue a business cancellation")
 		})
 	}
+}
+
+func (f *fakeControl) GetPreview(_ context.Context, p application.Principal, operationID string) (application.PreviewView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pv, ok := f.previews[operationID]
+	if !ok || p.TenantID != "tenant_a" {
+		return application.PreviewView{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+	}
+	return pv, nil
+}
+
+func (f *fakeControl) ReadPreviewArtifact(_ context.Context, p application.Principal, operationID, digest string) (application.PreviewBytes, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.artifacts[operationID+"/"+digest]
+	if !ok || p.TenantID != "tenant_a" {
+		return application.PreviewBytes{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+	}
+	return b, nil
+}
+
+func (f *fakeControl) ReadSource(_ context.Context, p application.Principal, operationID string) (application.SourceBytes, error) {
+	if p.TenantID != "tenant_a" || operationID != "op_gen" {
+		return application.SourceBytes{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+	}
+	return application.SourceBytes{Lineage: digest, Revision: "1", Digest: digest, Body: []byte("tar-bytes")}, nil
 }

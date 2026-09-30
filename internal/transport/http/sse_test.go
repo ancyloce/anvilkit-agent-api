@@ -74,7 +74,7 @@ func streamOptions(bounds httptransport.StreamBounds) httptransport.Options {
 func newStreamServer(t *testing.T, fake *streamFake, bounds httptransport.StreamBounds) (*httptest.Server, http.Handler) {
 	t.Helper()
 	fake.commands, fake.ops, fake.events = map[string]application.CommandIdentity{}, map[string]application.OperationView{}, map[string][]application.EventFrame{}
-	srv, err := httptransport.NewServer(streamOptions(bounds), verifier{}, fake, func(context.Context) error { return nil })
+	srv, err := httptransport.NewServer(streamOptions(bounds), verifier{}, fake, httptransport.Gateways{}, func(context.Context) error { return nil })
 	require.NoError(t, err)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

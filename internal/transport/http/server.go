@@ -64,6 +64,27 @@ type StreamBounds struct {
 	WriteTimeout time.Duration
 }
 
+// Gateways are the owning services the API routes API-07..API-16 to; a
+// nil gateway is unavailable.
+type Gateways struct {
+	Knowledge application.Knowledge
+	MCP       application.MCP
+}
+
+func (g Gateways) knowledge() application.Knowledge {
+	if g.Knowledge == nil {
+		return application.Unavailable{Service: "knowledge"}
+	}
+	return g.Knowledge
+}
+
+func (g Gateways) mcp() application.MCP {
+	if g.MCP == nil {
+		return application.Unavailable{Service: "mcp"}
+	}
+	return g.MCP
+}
+
 // Server owns the Gin engine and the http.Server.
 type Server struct {
 	engine *gin.Engine
@@ -71,7 +92,7 @@ type Server struct {
 	served chan error
 }
 
-func NewServer(opts Options, verifier application.Verifier, control application.Control, ready func(context.Context) error) (*Server, error) {
+func NewServer(opts Options, verifier application.Verifier, control application.Control, gateways Gateways, ready func(context.Context) error) (*Server, error) {
 	spec, err := agentapi.GetSwagger()
 	if err != nil {
 		return nil, err
@@ -117,7 +138,7 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	if prepProfile == "" {
 		prepProfile = "preparation-v1"
 	}
-	handlers := agentapi.NewStrictHandlerWithOptions(&strictHandlers{control: control, transferWindow: window, preparationProfile: prepProfile}, nil, agentapi.StrictGinServerOptions{
+	handlers := agentapi.NewStrictHandlerWithOptions(&strictHandlers{control: control, knowledge: gateways.knowledge(), mcp: gateways.mcp(), transferWindow: window, preparationProfile: prepProfile}, nil, agentapi.StrictGinServerOptions{
 		RequestErrorHandlerFunc:  func(c *gin.Context, err error) { fail(c, invalidArgument(err.Error())) },
 		HandlerErrorFunc:         func(c *gin.Context, err error) { fail(c, fromControl(err)) },
 		ResponseErrorHandlerFunc: func(c *gin.Context, err error) { fail(c, fromControl(err)) },

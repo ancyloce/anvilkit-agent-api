@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base32"
@@ -12,12 +13,15 @@ import (
 	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 )
 
-// strictHandlers implements the generated StrictServerInterface. Operations
-// whose owning service is not part of this unit (Knowledge, MCP, artifacts,
-// preparation) answer DEPENDENCY_UNAVAILABLE; they are wired by P08/P13/
-// P15–P19 without changing the public contract.
+// strictHandlers implements the generated StrictServerInterface: Control
+// for operations, preparations, previews and artifacts, the Knowledge and
+// MCP gateways for API-07..API-16 (P20).
 type strictHandlers struct {
 	control application.Control
+	// knowledge and mcp are the gateways to the owning services (P20);
+	// without a placement they answer DEPENDENCY_UNAVAILABLE.
+	knowledge application.Knowledge
+	mcp       application.MCP
 	// transferWindow is the reviewed deadline the API sets on a transfer
 	// it begins; Control bounds it further by the operation and attempt.
 	transferWindow time.Duration
@@ -56,7 +60,8 @@ func optStr(s string) *string {
 func viewToPublic(v application.OperationView) agentapi.OperationView {
 	out := agentapi.OperationView{
 		OperationId: v.OperationID, TenantId: v.TenantID, ActorId: v.ActorID, Kind: agentapi.OperationKind(v.Kind),
-		Subject:   agentapi.OperationSubject{ProfileId: v.ProfileID, SubjectDigest: v.SubjectDigest, BriefId: optStr(v.BriefID), SourceRevision: optStr(v.SourceRevision)},
+		Subject: agentapi.OperationSubject{ProfileId: v.ProfileID, SubjectDigest: v.SubjectDigest, BriefId: optStr(v.BriefID), SourceRevision: optStr(v.SourceRevision),
+			SourceHandle: optStr(v.SourceHandle)},
 		Lifecycle: agentapi.Lifecycle(v.Lifecycle), Phase: v.Phase, Control: agentapi.ControlState(v.Control), Cleanup: agentapi.CleanupState(v.Cleanup),
 		Finance: agentapi.FinanceState(v.Finance), Revision: v.Revision, CoveredEventSeq: v.CoveredEventSeq, ExecutionEpoch: v.ExecutionEpoch,
 		CreatedAt: v.CreatedAt.UTC(), UpdatedAt: v.UpdatedAt.UTC(), Deadline: v.Deadline.UTC(), FailureCode: optStr(v.FailureCode), ProjectId: optStr(v.ProjectID),
@@ -90,7 +95,9 @@ func receiptToPublic(r application.CommandReceipt) agentapi.CommandReceipt {
 func (h *strictHandlers) CreateOperation(ctx context.Context, req agentapi.CreateOperationRequestObject) (agentapi.CreateOperationResponseObject, error) {
 	cmd, p := identity(ctx, req.Body.CommandId)
 	s := req.Body.Subject
-	view, err := h.control.CreateOperation(ctx, cmd, p, string(req.Body.Kind), s.ProfileId, s.SubjectDigest, deref(s.BriefId), deref(s.SourceRevision))
+	view, err := h.control.CreateOperation(ctx, cmd, p, string(req.Body.Kind), application.OperationSubject{
+		ProfileID: s.ProfileId, SubjectDigest: s.SubjectDigest, BriefID: deref(s.BriefId), SourceRevision: deref(s.SourceRevision), SourceHandle: deref(s.SourceHandle),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -215,45 +222,217 @@ func (h *strictHandlers) FinalizeTransfer(ctx context.Context, req agentapi.Fina
 	}
 	return agentapi.FinalizeTransfer200JSONResponse(transferToPublic(view)), nil
 }
-func (h *strictHandlers) Search(context.Context, agentapi.SearchRequestObject) (agentapi.SearchResponseObject, error) {
-	return nil, notDeployed("knowledge (P16)")
+
+// ---- previews (P20) ----
+
+func (h *strictHandlers) GetPreview(ctx context.Context, req agentapi.GetPreviewRequestObject) (agentapi.GetPreviewResponseObject, error) {
+	v, err := h.control.GetPreview(ctx, principal(ginContext(ctx)), req.OperationId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetPreview200JSONResponse(v), nil
 }
-func (h *strictHandlers) RegisterSource(context.Context, agentapi.RegisterSourceRequestObject) (agentapi.RegisterSourceResponseObject, error) {
-	return nil, notDeployed("knowledge (P15)")
+
+// ReadPreviewArtifact returns the verified bytes of the preview's module or
+// one of its stylesheets; they are served as data, never executed here.
+func (h *strictHandlers) ReadPreviewArtifact(ctx context.Context, req agentapi.ReadPreviewArtifactRequestObject) (agentapi.ReadPreviewArtifactResponseObject, error) {
+	b, err := h.control.ReadPreviewArtifact(ctx, principal(ginContext(ctx)), req.OperationId, req.Digest)
+	if err != nil {
+		return nil, err
+	}
+	if c := ginContext(ctx); c != nil {
+		c.Header("Cache-Control", "no-store")
+		c.Header("X-Content-Type-Options", "nosniff")
+	}
+	if b.MediaType == "text/css" {
+		return agentapi.ReadPreviewArtifact200TextcssResponse{Body: bytes.NewReader(b.Body), ContentLength: int64(len(b.Body))}, nil
+	}
+	return agentapi.ReadPreviewArtifact200TextjavascriptResponse{Body: bytes.NewReader(b.Body), ContentLength: int64(len(b.Body))}, nil
 }
-func (h *strictHandlers) DeleteSource(context.Context, agentapi.DeleteSourceRequestObject) (agentapi.DeleteSourceResponseObject, error) {
-	return nil, notDeployed("knowledge (P15)")
+
+// ReadSource returns the exact source archive of a generation or a preview
+// build; the lineage, digest and revision travel in headers.
+func (h *strictHandlers) ReadSource(ctx context.Context, req agentapi.ReadSourceRequestObject) (agentapi.ReadSourceResponseObject, error) {
+	src, err := h.control.ReadSource(ctx, principal(ginContext(ctx)), req.OperationId)
+	if err != nil {
+		return nil, err
+	}
+	if c := ginContext(ctx); c != nil {
+		c.Header("Cache-Control", "no-store")
+	}
+	return agentapi.ReadSource200ApplicationxTarResponse{Body: bytes.NewReader(src.Body), ContentLength: int64(len(src.Body)),
+		Headers: agentapi.ReadSource200ResponseHeaders{AnvilKitSourceLineage: src.Lineage, AnvilKitSourceDigest: src.Digest, AnvilKitSourceRevision: optStr(src.Revision)}}, nil
 }
-func (h *strictHandlers) GetSource(context.Context, agentapi.GetSourceRequestObject) (agentapi.GetSourceResponseObject, error) {
-	return nil, notDeployed("knowledge (P15)")
+
+// ---- knowledge (API-07/08/09/13/14) ----
+
+func limitOf(l *agentapi.Limit) int {
+	if l == nil {
+		return 0
+	}
+	return int(*l)
 }
-func (h *strictHandlers) ReplaceSourceAccess(context.Context, agentapi.ReplaceSourceAccessRequestObject) (agentapi.ReplaceSourceAccessResponseObject, error) {
-	return nil, notDeployed("knowledge (P15)")
+
+func (h *strictHandlers) ListSources(ctx context.Context, req agentapi.ListSourcesRequestObject) (agentapi.ListSourcesResponseObject, error) {
+	page, err := h.knowledge.ListSources(ctx, principal(ginContext(ctx)), deref(req.Params.Cursor), limitOf(req.Params.Limit))
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListSources200JSONResponse(page), nil
 }
-func (h *strictHandlers) ProposeMemory(context.Context, agentapi.ProposeMemoryRequestObject) (agentapi.ProposeMemoryResponseObject, error) {
-	return nil, notDeployed("knowledge memory (P17)")
+
+func (h *strictHandlers) RegisterSource(ctx context.Context, req agentapi.RegisterSourceRequestObject) (agentapi.RegisterSourceResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	src, err := h.knowledge.RegisterSource(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.RegisterSource202JSONResponse(src), nil
 }
-func (h *strictHandlers) DecideMemory(context.Context, agentapi.DecideMemoryRequestObject) (agentapi.DecideMemoryResponseObject, error) {
-	return nil, notDeployed("knowledge memory (P17)")
+
+func (h *strictHandlers) GetSource(ctx context.Context, req agentapi.GetSourceRequestObject) (agentapi.GetSourceResponseObject, error) {
+	src, err := h.knowledge.GetSource(ctx, principal(ginContext(ctx)), req.SourceId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetSource200JSONResponse(src), nil
 }
-func (h *strictHandlers) CreateToolCall(context.Context, agentapi.CreateToolCallRequestObject) (agentapi.CreateToolCallResponseObject, error) {
-	return nil, notDeployed("mcp (P19)")
+
+func (h *strictHandlers) DeleteSource(ctx context.Context, req agentapi.DeleteSourceRequestObject) (agentapi.DeleteSourceResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	src, err := h.knowledge.DeleteSource(ctx, cmd, p, req.SourceId, req.Body.ExpectedRevision)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.DeleteSource200JSONResponse(src), nil
 }
-func (h *strictHandlers) GetToolCall(context.Context, agentapi.GetToolCallRequestObject) (agentapi.GetToolCallResponseObject, error) {
-	return nil, notDeployed("mcp (P19)")
+
+func (h *strictHandlers) ReplaceSourceAccess(ctx context.Context, req agentapi.ReplaceSourceAccessRequestObject) (agentapi.ReplaceSourceAccessResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	src, err := h.knowledge.ReplaceSourceAccess(ctx, cmd, p, req.SourceId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ReplaceSourceAccess200JSONResponse(src), nil
 }
-func (h *strictHandlers) ListCatalog(context.Context, agentapi.ListCatalogRequestObject) (agentapi.ListCatalogResponseObject, error) {
-	return nil, notDeployed("mcp (P18)")
+
+func (h *strictHandlers) Search(ctx context.Context, req agentapi.SearchRequestObject) (agentapi.SearchResponseObject, error) {
+	res, err := h.knowledge.Search(ctx, principal(ginContext(ctx)), *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.Search200JSONResponse(res), nil
 }
-func (h *strictHandlers) ReviewDescriptor(context.Context, agentapi.ReviewDescriptorRequestObject) (agentapi.ReviewDescriptorResponseObject, error) {
-	return nil, notDeployed("mcp (P18)")
+
+func (h *strictHandlers) ListMemories(ctx context.Context, req agentapi.ListMemoriesRequestObject) (agentapi.ListMemoriesResponseObject, error) {
+	page, err := h.knowledge.ListMemories(ctx, principal(ginContext(ctx)), req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListMemories200JSONResponse(page), nil
 }
-func (h *strictHandlers) CreateGrant(context.Context, agentapi.CreateGrantRequestObject) (agentapi.CreateGrantResponseObject, error) {
-	return nil, notDeployed("mcp (P18)")
+
+func (h *strictHandlers) ProposeMemory(ctx context.Context, req agentapi.ProposeMemoryRequestObject) (agentapi.ProposeMemoryResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	f, err := h.knowledge.ProposeMemory(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ProposeMemory201JSONResponse(f), nil
 }
-func (h *strictHandlers) GetGrant(context.Context, agentapi.GetGrantRequestObject) (agentapi.GetGrantResponseObject, error) {
-	return nil, notDeployed("mcp (P18)")
+
+func (h *strictHandlers) DecideMemory(ctx context.Context, req agentapi.DecideMemoryRequestObject) (agentapi.DecideMemoryResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	f, err := h.knowledge.DecideMemory(ctx, cmd, p, req.FactId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.DecideMemory200JSONResponse(f), nil
 }
-func (h *strictHandlers) RevokeGrant(context.Context, agentapi.RevokeGrantRequestObject) (agentapi.RevokeGrantResponseObject, error) {
-	return nil, notDeployed("mcp (P18)")
+
+// ---- mcp (API-10/11/15/16) ----
+
+func (h *strictHandlers) ListCatalog(ctx context.Context, req agentapi.ListCatalogRequestObject) (agentapi.ListCatalogResponseObject, error) {
+	page, err := h.mcp.ListCatalog(ctx, principal(ginContext(ctx)), req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListCatalog200JSONResponse(page), nil
+}
+
+func (h *strictHandlers) DiscoverServer(ctx context.Context, req agentapi.DiscoverServerRequestObject) (agentapi.DiscoverServerResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	d, err := h.mcp.DiscoverServer(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.DiscoverServer201JSONResponse(d), nil
+}
+
+func (h *strictHandlers) ReviewDescriptor(ctx context.Context, req agentapi.ReviewDescriptorRequestObject) (agentapi.ReviewDescriptorResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	d, err := h.mcp.ReviewDescriptor(ctx, cmd, p, req.ServerId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ReviewDescriptor200JSONResponse(d), nil
+}
+
+func (h *strictHandlers) ListGrants(ctx context.Context, req agentapi.ListGrantsRequestObject) (agentapi.ListGrantsResponseObject, error) {
+	page, err := h.mcp.ListGrants(ctx, principal(ginContext(ctx)), req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListGrants200JSONResponse(page), nil
+}
+
+func (h *strictHandlers) CreateGrant(ctx context.Context, req agentapi.CreateGrantRequestObject) (agentapi.CreateGrantResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	g, err := h.mcp.CreateGrant(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.CreateGrant201JSONResponse(g), nil
+}
+
+func (h *strictHandlers) GetGrant(ctx context.Context, req agentapi.GetGrantRequestObject) (agentapi.GetGrantResponseObject, error) {
+	g, err := h.mcp.GetGrant(ctx, principal(ginContext(ctx)), req.GrantId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetGrant200JSONResponse(g), nil
+}
+
+func (h *strictHandlers) GetRevocationProgress(ctx context.Context, req agentapi.GetRevocationProgressRequestObject) (agentapi.GetRevocationProgressResponseObject, error) {
+	pr, err := h.mcp.GetRevocationProgress(ctx, principal(ginContext(ctx)), req.GrantId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetRevocationProgress200JSONResponse(pr), nil
+}
+
+func (h *strictHandlers) RevokeGrant(ctx context.Context, req agentapi.RevokeGrantRequestObject) (agentapi.RevokeGrantResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	g, err := h.mcp.RevokeGrant(ctx, cmd, p, req.GrantId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.RevokeGrant202JSONResponse(g), nil
+}
+
+func (h *strictHandlers) CreateToolCall(ctx context.Context, req agentapi.CreateToolCallRequestObject) (agentapi.CreateToolCallResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	c, err := h.mcp.CreateToolCall(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.CreateToolCall202JSONResponse(c), nil
+}
+
+func (h *strictHandlers) GetToolCall(ctx context.Context, req agentapi.GetToolCallRequestObject) (agentapi.GetToolCallResponseObject, error) {
+	c, err := h.mcp.GetToolCall(ctx, principal(ginContext(ctx)), req.CallId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetToolCall200JSONResponse(c), nil
 }
