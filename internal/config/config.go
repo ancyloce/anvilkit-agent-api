@@ -44,6 +44,14 @@ type Control struct {
 	Address string `koanf:"address"`
 }
 
+// Owner is the placement of an owning service the API gateways to (P20:
+// Knowledge, MCP); an empty address leaves its endpoints answering
+// DEPENDENCY_UNAVAILABLE.
+type Owner struct {
+	Address string        `koanf:"address"`
+	Timeout time.Duration `koanf:"timeout"`
+}
+
 // Auth selects the identity protocol. Only the DEVELOPMENT_ONLY "fixture"
 // mode exists until ENV-07 supplies the IdP inputs.
 type Auth struct {
@@ -73,12 +81,14 @@ type Preparations struct {
 }
 
 type Config struct {
-	HTTP      HTTP      `koanf:"http"`
-	Control   Control   `koanf:"control"`
-	Auth      Auth      `koanf:"auth"`
-	SSE       SSE       `koanf:"sse"`
+	HTTP         HTTP         `koanf:"http"`
+	Control      Control      `koanf:"control"`
+	Auth         Auth         `koanf:"auth"`
+	SSE          SSE          `koanf:"sse"`
 	Artifacts    Artifacts    `koanf:"artifacts"`
 	Preparations Preparations `koanf:"preparations"`
+	Knowledge    Owner        `koanf:"knowledge"`
+	MCP          Owner        `koanf:"mcp"`
 }
 
 // defaults are the reviewed baseline values; the file and the allowed
@@ -93,6 +103,8 @@ var defaults = map[string]any{
 	"sse.slow_consumer_grace":   "5s",
 	"sse.write_timeout":         "10s",
 	"artifacts.transfer_window": "15m",
+	"knowledge.timeout":         "30s",
+	"mcp.timeout":               "60s",
 	"preparations.profile":      "preparation-v1",
 }
 
@@ -100,10 +112,12 @@ var defaults = map[string]any{
 // accepts: deployment placement only. Any other ANVILKIT_API_* variable is an
 // unknown key and rejects the candidate.
 var envOverrides = map[string]string{
-	"ANVILKIT_API_LISTEN":          "http.listen",
-	"ANVILKIT_API_CONTROL_ADDRESS": "control.address",
-	"ANVILKIT_API_AUTH_MODE":       "auth.mode",
-	"ANVILKIT_API_PRINCIPALS_FILE": "auth.principals_file",
+	"ANVILKIT_API_LISTEN":            "http.listen",
+	"ANVILKIT_API_CONTROL_ADDRESS":   "control.address",
+	"ANVILKIT_API_AUTH_MODE":         "auth.mode",
+	"ANVILKIT_API_PRINCIPALS_FILE":   "auth.principals_file",
+	"ANVILKIT_API_KNOWLEDGE_ADDRESS": "knowledge.address",
+	"ANVILKIT_API_MCP_ADDRESS":       "mcp.address",
 }
 
 // Load builds the snapshot from the file named by EnvConfigFile (or
@@ -172,6 +186,11 @@ func (c Config) validate() error {
 	}
 	req("http.listen", c.HTTP.Listen)
 	req("control.address", c.Control.Address)
+	for name, o := range map[string]Owner{"knowledge": c.Knowledge, "mcp": c.MCP} {
+		if o.Timeout < time.Second || o.Timeout > 10*time.Minute {
+			errs = append(errs, fmt.Errorf("%s.timeout %s outside [1s, 10m]", name, o.Timeout))
+		}
+	}
 	if c.HTTP.ReadHeaderTimeout < time.Second || c.HTTP.ReadHeaderTimeout > time.Minute {
 		errs = append(errs, fmt.Errorf("http.read_header_timeout %s outside [1s, 1m]", c.HTTP.ReadHeaderTimeout))
 	}
