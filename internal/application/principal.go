@@ -59,28 +59,31 @@ func DigestBytes(b []byte) string { return fmt.Sprintf("sha256:%x", sha256.Sum25
 // OperationView is the public projection returned by the API; it mirrors
 // contracts/openapi/agent.yaml#/components/schemas/OperationView.
 type OperationView struct {
-	OperationID     string
-	TenantID        string
-	ProjectID       string
-	ActorID         string
-	Kind            string
-	ProfileID       string
-	SubjectDigest   string
-	BriefID         string
-	SourceRevision  string
-	SourceHandle    string
-	Lifecycle       string
-	Phase           string
-	Control         string
-	Cleanup         string
-	Finance         string
-	Revision        string
-	CoveredEventSeq string
-	ExecutionEpoch  string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Deadline        time.Time
-	FailureCode     string
+	OperationID    string
+	TenantID       string
+	ProjectID      string
+	ActorID        string
+	Kind           string
+	ProfileID      string
+	SubjectDigest  string
+	BriefID        string
+	SourceRevision string
+	SourceHandle   string
+	// SourceOperationID and PackageVersion bind a release (P21).
+	SourceOperationID string
+	PackageVersion    string
+	Lifecycle         string
+	Phase             string
+	Control           string
+	Cleanup           string
+	Finance           string
+	Revision          string
+	CoveredEventSeq   string
+	ExecutionEpoch    string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	Deadline          time.Time
+	FailureCode       string
 	// ActiveDeadline is set once by the first execution permit of a
 	// generation; nil until then.
 	ActiveDeadline *time.Time
@@ -230,6 +233,9 @@ type Control interface {
 	ReadPreviewArtifact(ctx context.Context, p Principal, operationID, digest string) (PreviewBytes, error)
 	// ReadSource returns the verified source archive a workbench edits.
 	ReadSource(ctx context.Context, p Principal, operationID string) (SourceBytes, error)
+	// GetRelease reads the committed release of a release operation of the
+	// principal's tenant (P21).
+	GetRelease(ctx context.Context, p Principal, operationID string) (ReleaseView, error)
 }
 
 // OperationSubject is what API-02 binds an operation to; SourceHandle is
@@ -240,6 +246,10 @@ type OperationSubject struct {
 	BriefID        string
 	SourceRevision string
 	SourceHandle   string
+	// SourceOperationID and PackageVersion bind a release (P21); Control
+	// binds the released source artifact itself.
+	SourceOperationID string
+	PackageVersion    string
 }
 
 // ResetRequired tells the SSE handler to send a reset frame.

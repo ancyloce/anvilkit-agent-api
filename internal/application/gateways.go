@@ -40,6 +40,9 @@ type MCP interface {
 // PreviewView is the committed preview of a preview_build operation.
 type PreviewView = agentapi.Preview
 
+// ReleaseView is the public release projection (P21).
+type ReleaseView = agentapi.Release
+
 // SourceBytes are the verified bytes of an operation's source archive, its
 // lineage and the revision they are (empty when unknown).
 type SourceBytes struct {
