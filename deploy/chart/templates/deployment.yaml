@@ -11,7 +11,9 @@ metadata:
   labels:
     {{- include "anvilkit-agent-api.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "anvilkit-agent-api.selectorLabels" . | nindent 6 }}
