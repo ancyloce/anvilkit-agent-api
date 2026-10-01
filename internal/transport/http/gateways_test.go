@@ -136,4 +136,39 @@ func TestGateways(t *testing.T) {
 		status, _, _ = do(t, ts, http.MethodGet, "/api/v1/operations/op_prv/preview", "token-tenant-b-0123456789", "")
 		require.Equal(t, http.StatusNotFound, status, "another tenant never sees the preview")
 	})
+
+	t.Run("a release is requested by its source operation and read with its lock only when activated", func(t *testing.T) {
+		fake := newFake()
+		ts := gatewayServer(t, fake, httptransport.Gateways{})
+		status, _, _ := do(t, ts, http.MethodPost, "/api/v1/operations", tokenA,
+			`{"commandId":"cmd_rel","kind":"release","subject":{"profileId":"release-v1","subjectDigest":"`+digest+`","sourceRevision":"4","sourceOperationId":"op_prv","packageVersion":"1.0.0","npmRegistry":"https://attacker.invalid/"}}`)
+		require.Equal(t, http.StatusBadRequest, status, "a caller never names a destination")
+		status, body, _ := do(t, ts, http.MethodPost, "/api/v1/operations", tokenA,
+			`{"commandId":"cmd_rel","kind":"release","subject":{"profileId":"release-v1","subjectDigest":"`+digest+`","sourceRevision":"4","sourceOperationId":"op_prv","packageVersion":"1.0.0"}}`)
+		require.Equal(t, http.StatusAccepted, status, body)
+		require.Len(t, fake.subjects, 1)
+		require.Equal(t, "op_prv", fake.subjects[0].SourceOperationID)
+		require.Equal(t, "1.0.0", fake.subjects[0].PackageVersion)
+
+		now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+		rel := "rel_1"
+		manifest := digest
+		subject := &agentapi.ReleaseSubject{ComponentId: "cmp_hero", PuckType: "Hero", SourceRevision: "4", SourceDigest: digest, PackageName: "@anvilkit/hero", Version: "1.0.0",
+			Npm: agentapi.ReleaseArtifactDigest{Digest: digest, SizeBytes: "10"}, Browser: agentapi.ReleaseArtifactDigest{Digest: digest, SizeBytes: "10"},
+			Css: []agentapi.ReleaseArtifactDigest{{Digest: digest, SizeBytes: "3"}}, BuildProfileId: "build-support-dev-v1", BuildProfileDigest: digest,
+			ValidatorProfileId: "validator-dev-v1", ValidatorProfileDigest: digest, HostAbi: "host-abi-dev-v1", HostAbiDigest: digest,
+			CertificationEvidenceDigest: digest, SubjectDigest: digest}
+		subject.Destinations.NpmRegistry, subject.Destinations.BrowserOrigin = "https://registry.anvilkit.invalid/", "https://components.anvilkit.invalid"
+		fake.releases["op_rel"] = agentapi.Release{OperationId: "op_rel", Lineage: digest, SourceRevision: "4", State: "activated", Subject: subject, ReleaseId: &rel,
+			Npm: agentapi.ReleaseTarget{State: "succeeded"}, Browser: agentapi.ReleaseTarget{State: "succeeded", ManifestDigest: &manifest},
+			Activation: agentapi.ReleaseTarget{State: "succeeded"}, Lock: &agentapi.ReleaseLock{SchemaVersion: agentapi.N1, ComponentId: "cmp_hero", PuckType: "Hero",
+				ReleaseId: rel, PackageName: "@anvilkit/hero", PackageVersion: "1.0.0", BrowserManifestDigest: manifest, HostProfileId: "host-abi-dev-v1"},
+			Revision: "6", UpdatedAt: now}
+		status, body, _ = do(t, ts, http.MethodGet, "/api/v1/operations/op_rel/release", tokenA, "")
+		require.Equal(t, http.StatusOK, status)
+		require.Equal(t, "activated", body["state"])
+		require.Equal(t, "rel_1", body["lock"].(map[string]any)["releaseId"])
+		status, _, _ = do(t, ts, http.MethodGet, "/api/v1/operations/op_rel/release", "token-tenant-b-0123456789", "")
+		require.Equal(t, http.StatusNotFound, status, "another tenant never sees the release")
+	})
 }

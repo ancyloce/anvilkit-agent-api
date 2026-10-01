@@ -61,7 +61,7 @@ func viewToPublic(v application.OperationView) agentapi.OperationView {
 	out := agentapi.OperationView{
 		OperationId: v.OperationID, TenantId: v.TenantID, ActorId: v.ActorID, Kind: agentapi.OperationKind(v.Kind),
 		Subject: agentapi.OperationSubject{ProfileId: v.ProfileID, SubjectDigest: v.SubjectDigest, BriefId: optStr(v.BriefID), SourceRevision: optStr(v.SourceRevision),
-			SourceHandle: optStr(v.SourceHandle)},
+			SourceHandle: optStr(v.SourceHandle), SourceOperationId: optStr(v.SourceOperationID), PackageVersion: optStr(v.PackageVersion)},
 		Lifecycle: agentapi.Lifecycle(v.Lifecycle), Phase: v.Phase, Control: agentapi.ControlState(v.Control), Cleanup: agentapi.CleanupState(v.Cleanup),
 		Finance: agentapi.FinanceState(v.Finance), Revision: v.Revision, CoveredEventSeq: v.CoveredEventSeq, ExecutionEpoch: v.ExecutionEpoch,
 		CreatedAt: v.CreatedAt.UTC(), UpdatedAt: v.UpdatedAt.UTC(), Deadline: v.Deadline.UTC(), FailureCode: optStr(v.FailureCode), ProjectId: optStr(v.ProjectID),
@@ -97,6 +97,7 @@ func (h *strictHandlers) CreateOperation(ctx context.Context, req agentapi.Creat
 	s := req.Body.Subject
 	view, err := h.control.CreateOperation(ctx, cmd, p, string(req.Body.Kind), application.OperationSubject{
 		ProfileID: s.ProfileId, SubjectDigest: s.SubjectDigest, BriefID: deref(s.BriefId), SourceRevision: deref(s.SourceRevision), SourceHandle: deref(s.SourceHandle),
+		SourceOperationID: deref(s.SourceOperationId), PackageVersion: deref(s.PackageVersion),
 	})
 	if err != nil {
 		return nil, err
@@ -221,6 +222,16 @@ func (h *strictHandlers) FinalizeTransfer(ctx context.Context, req agentapi.Fina
 		return nil, err
 	}
 	return agentapi.FinalizeTransfer200JSONResponse(transferToPublic(view)), nil
+}
+
+// ---- releases (P21) ----
+
+func (h *strictHandlers) GetRelease(ctx context.Context, req agentapi.GetReleaseRequestObject) (agentapi.GetReleaseResponseObject, error) {
+	v, err := h.control.GetRelease(ctx, principal(ginContext(ctx)), req.OperationId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetRelease200JSONResponse(v), nil
 }
 
 // ---- previews (P20) ----

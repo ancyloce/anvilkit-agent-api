@@ -67,11 +67,13 @@ type fakeControl struct {
 	handles   map[string]string
 	panicOn   string // operation id whose GetOperation panics (recovery test)
 	previews  map[string]application.PreviewView
+	releases  map[string]application.ReleaseView
+	subjects  []application.OperationSubject
 	artifacts map[string]application.PreviewBytes
 }
 
 func newFake() *fakeControl {
-	return &fakeControl{commands: map[string]application.CommandIdentity{}, ops: map[string]application.OperationView{}, events: map[string][]application.EventFrame{}, transfers: map[string]application.TransferView{}, handles: map[string]string{}, previews: map[string]application.PreviewView{}, artifacts: map[string]application.PreviewBytes{}}
+	return &fakeControl{commands: map[string]application.CommandIdentity{}, ops: map[string]application.OperationView{}, events: map[string][]application.EventFrame{}, transfers: map[string]application.TransferView{}, handles: map[string]string{}, previews: map[string]application.PreviewView{}, releases: map[string]application.ReleaseView{}, artifacts: map[string]application.PreviewBytes{}}
 }
 
 func (f *fakeControl) CreateOperation(_ context.Context, cmd application.CommandIdentity, p application.Principal, kind string, subject application.OperationSubject) (application.OperationView, error) {
@@ -86,6 +88,7 @@ func (f *fakeControl) CreateOperation(_ context.Context, cmd application.Command
 		return f.ops[key], nil
 	}
 	f.commands[key] = cmd
+	f.subjects = append(f.subjects, subject)
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	view := application.OperationView{
 		OperationID: "op_" + cmd.CommandID, TenantID: p.TenantID, ActorID: p.ActorID, Kind: kind, ProfileID: profileID, SubjectDigest: subjectDigest,
@@ -633,6 +636,16 @@ func TestHTTPContextReachesControl(t *testing.T) {
 			require.Len(t, fake.events[accepted.OperationID], 2, "ending the HTTP wait must not issue a business cancellation")
 		})
 	}
+}
+
+func (f *fakeControl) GetRelease(_ context.Context, p application.Principal, operationID string) (application.ReleaseView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.releases[operationID]
+	if !ok || p.TenantID != "tenant_a" {
+		return application.ReleaseView{}, &application.ControlError{Code: "NOT_FOUND", Message: "not found"}
+	}
+	return r, nil
 }
 
 func (f *fakeControl) GetPreview(_ context.Context, p application.Principal, operationID string) (application.PreviewView, error) {
