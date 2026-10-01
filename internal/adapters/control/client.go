@@ -75,6 +75,7 @@ func toView(v *controlv1.OperationView) application.OperationView {
 		OperationID: v.GetOperationId(), TenantID: v.GetTenantId(), ProjectID: v.GetProjectId(), ActorID: v.GetActorId(),
 		Kind: enumWord(v.GetKind().String(), "OPERATION_KIND_"), ProfileID: v.GetSubject().GetProfileId(), SubjectDigest: v.GetSubject().GetSubjectDigest(),
 		BriefID: v.GetSubject().GetBriefId(), SourceRevision: v.GetSubject().GetSourceRevision(), SourceHandle: v.GetSubject().GetSourceHandle(),
+		SourceOperationID: v.GetSubject().GetSourceOperationId(), PackageVersion: v.GetSubject().GetPackageVersion(),
 		Lifecycle: enumWord(v.GetLifecycle().String(), "LIFECYCLE_"), Phase: v.GetPhase(), Control: enumWord(v.GetControl().String(), "CONTROL_STATE_"),
 		Cleanup: enumWord(v.GetCleanup().String(), "CLEANUP_STATE_"), Finance: enumWord(v.GetFinance().String(), "FINANCE_STATE_"),
 		Revision: v.GetRevision(), CoveredEventSeq: v.GetCoveredEventSeq(), ExecutionEpoch: v.GetExecutionEpoch(),
@@ -197,6 +198,12 @@ func (c *Client) CreateOperation(ctx context.Context, cmd application.CommandIde
 	}
 	if s.SourceHandle != "" {
 		subject.SourceHandle = &s.SourceHandle
+	}
+	if s.SourceOperationID != "" {
+		subject.SourceOperationId = &s.SourceOperationID
+	}
+	if s.PackageVersion != "" {
+		subject.PackageVersion = &s.PackageVersion
 	}
 	resp, err := c.ops.CreateOperation(ctx, &controlv1.CreateOperationRequest{Command: command(cmd), Scope: scope(p), Kind: kinds[kind], Subject: subject})
 	if err != nil {
