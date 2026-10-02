@@ -19,6 +19,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-gonic/gin"
 	ginmiddleware "github.com/oapi-codegen/gin-middleware"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
@@ -44,6 +45,9 @@ type Options struct {
 	// PreparationProfile is the reviewed operation profile API-01 accepts
 	// a prompt into.
 	PreparationProfile string
+	// Tracer and Metrics observe every request (observe.go); nil disables them.
+	Tracer  trace.Tracer
+	Metrics *Metrics
 }
 
 // StreamBounds limits the SSE transport (contracts.md §6 "bounded
@@ -105,7 +109,8 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// Errors are collected with c.Error and rendered once by errorEnvelope,
 	// which is registered first so it runs last; a panic becomes the same
 	// envelope through Gin's recovery.
-	engine.Use(requestID(), errorEnvelope(), gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
+	// observe is outermost: it records the status the envelope finally wrote.
+	engine.Use(observe(opts.Tracer, opts.Metrics), requestID(), errorEnvelope(), gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
 		fail(c, &apiError{status: http.StatusServiceUnavailable, code: "DEPENDENCY_UNAVAILABLE", message: "internal failure", retryable: true})
 	}))
 

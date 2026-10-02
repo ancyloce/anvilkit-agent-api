@@ -79,3 +79,15 @@ func TestRangesAndCrossFieldRules(t *testing.T) {
 	_, err = config.LoadFrom(write(t, minimal+"sse:\n  frame_buffer: many\n"), env)
 	require.Error(t, err, "a value of the wrong type is rejected")
 }
+
+func TestTelemetryPlacement(t *testing.T) {
+	c, err := config.LoadFrom(write(t, minimal), append(env, "ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT=collector:4317", "ANVILKIT_API_TELEMETRY_METRICS_LISTEN=0.0.0.0:9190"))
+	require.NoError(t, err)
+	require.Equal(t, "collector:4317", c.Telemetry.OTLPEndpoint)
+	require.Equal(t, "0.0.0.0:9190", c.Telemetry.MetricsListen)
+	require.Equal(t, 1.0, c.Telemetry.SampleRatio)
+	_, err = config.LoadFrom(write(t, minimal+"telemetry:\n  sample_ratio: 1.5\n"), env)
+	require.ErrorContains(t, err, "telemetry.sample_ratio")
+	_, err = config.LoadFrom(write(t, minimal+"http:\n  listen: 0.0.0.0:9100\ntelemetry:\n  metrics_listen: 0.0.0.0:9100\n"), env)
+	require.ErrorContains(t, err, "must not be the public http.listen")
+}

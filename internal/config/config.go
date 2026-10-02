@@ -80,7 +80,18 @@ type Preparations struct {
 	Profile string `koanf:"profile"`
 }
 
+// Telemetry places the redacted signals (security.md "data classification,
+// logging and deletion"): spans over OTLP to the collector when an endpoint
+// is placed (no exporter otherwise), sampled at SampleRatio, and the
+// Prometheus metrics on their own listener, never on the public one.
+type Telemetry struct {
+	OTLPEndpoint  string  `koanf:"otlp_endpoint"`
+	SampleRatio   float64 `koanf:"sample_ratio"`
+	MetricsListen string  `koanf:"metrics_listen"`
+}
+
 type Config struct {
+	Telemetry    Telemetry    `koanf:"telemetry"`
 	HTTP         HTTP         `koanf:"http"`
 	Control      Control      `koanf:"control"`
 	Auth         Auth         `koanf:"auth"`
@@ -106,18 +117,21 @@ var defaults = map[string]any{
 	"knowledge.timeout":         "30s",
 	"mcp.timeout":               "60s",
 	"preparations.profile":      "preparation-v1",
+	"telemetry.sample_ratio":    1.0,
 }
 
 // envOverrides is the complete set of environment variables the service
 // accepts: deployment placement only. Any other ANVILKIT_API_* variable is an
 // unknown key and rejects the candidate.
 var envOverrides = map[string]string{
-	"ANVILKIT_API_LISTEN":            "http.listen",
-	"ANVILKIT_API_CONTROL_ADDRESS":   "control.address",
-	"ANVILKIT_API_AUTH_MODE":         "auth.mode",
-	"ANVILKIT_API_PRINCIPALS_FILE":   "auth.principals_file",
-	"ANVILKIT_API_KNOWLEDGE_ADDRESS": "knowledge.address",
-	"ANVILKIT_API_MCP_ADDRESS":       "mcp.address",
+	"ANVILKIT_API_LISTEN":                   "http.listen",
+	"ANVILKIT_API_CONTROL_ADDRESS":          "control.address",
+	"ANVILKIT_API_AUTH_MODE":                "auth.mode",
+	"ANVILKIT_API_PRINCIPALS_FILE":          "auth.principals_file",
+	"ANVILKIT_API_KNOWLEDGE_ADDRESS":        "knowledge.address",
+	"ANVILKIT_API_MCP_ADDRESS":              "mcp.address",
+	"ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT":  "telemetry.otlp_endpoint",
+	"ANVILKIT_API_TELEMETRY_METRICS_LISTEN": "telemetry.metrics_listen",
 }
 
 // Load builds the snapshot from the file named by EnvConfigFile (or
@@ -186,6 +200,12 @@ func (c Config) validate() error {
 	}
 	req("http.listen", c.HTTP.Listen)
 	req("control.address", c.Control.Address)
+	if c.Telemetry.SampleRatio < 0 || c.Telemetry.SampleRatio > 1 {
+		errs = append(errs, fmt.Errorf("telemetry.sample_ratio %v outside [0, 1]", c.Telemetry.SampleRatio))
+	}
+	if c.Telemetry.MetricsListen != "" && c.Telemetry.MetricsListen == c.HTTP.Listen {
+		errs = append(errs, errors.New("telemetry.metrics_listen must not be the public http.listen"))
+	}
 	for name, o := range map[string]Owner{"knowledge": c.Knowledge, "mcp": c.MCP} {
 		if o.Timeout < time.Second || o.Timeout > 10*time.Minute {
 			errs = append(errs, fmt.Errorf("%s.timeout %s outside [1s, 10m]", name, o.Timeout))
