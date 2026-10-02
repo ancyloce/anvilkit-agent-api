@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 
@@ -47,8 +48,12 @@ func Module() fx.Option {
 			func(cfg config.Config) (*control.Client, error) { return control.Dial(cfg.Control.Address) },
 			func(c *control.Client) application.Control { return c },
 			newGateways,
-			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways) (*httptransport.Server, error) {
-				return httptransport.NewServer(ServerOptions(cfg), v, ctl, gw, func(context.Context) error { return nil })
+			newTracer,
+			newMetrics,
+			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways, tracer trace.Tracer, metrics *httptransport.Metrics) (*httptransport.Server, error) {
+				opts := ServerOptions(cfg)
+				opts.Tracer, opts.Metrics = tracer, metrics
+				return httptransport.NewServer(opts, v, ctl, gw, func(context.Context) error { return nil })
 			},
 		),
 		fx.Invoke(run),
