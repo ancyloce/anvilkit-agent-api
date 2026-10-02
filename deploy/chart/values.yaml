@@ -40,6 +40,14 @@ listen:
 control:
   address: ""
 
+# The Knowledge and MCP owners' gRPC endpoints (ANVILKIT_API_KNOWLEDGE_ADDRESS,
+# ANVILKIT_API_MCP_ADDRESS); empty leaves their endpoints answering
+# DEPENDENCY_UNAVAILABLE.
+knowledge:
+  address: ""
+mcp:
+  address: ""
+
 # The identity protocol (ANVILKIT_API_AUTH_MODE). Only the DEVELOPMENT_ONLY
 # "fixture" mode exists until ENV-07 supplies the IdP inputs; it reads the
 # principals file from an existing Secret that this chart never creates.
@@ -121,3 +129,11 @@ tolerations: []
 affinity: {}
 podAnnotations: {}
 podLabels: {}
+
+# Telemetry placement (P23): the collector's OTLP endpoint for spans
+# (ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT) and the port of its own metrics listener
+# (ANVILKIT_API_TELEMETRY_METRICS_LISTEN, never the service port); empty disables it.
+# Scraping is the environment's pod annotations.
+telemetry:
+  otlpEndpoint: ""
+  metricsPort: 0

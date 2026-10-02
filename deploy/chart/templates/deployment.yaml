@@ -58,8 +58,24 @@ spec:
               value: {{ printf "%s:%d" .Values.listen.address (int .Values.listen.port) | quote }}
             - name: ANVILKIT_API_CONTROL_ADDRESS
               value: {{ .Values.control.address | quote }}
+            {{- if .Values.knowledge.address }}
+            - name: ANVILKIT_API_KNOWLEDGE_ADDRESS
+              value: {{ .Values.knowledge.address | quote }}
+            {{- end }}
+            {{- if .Values.mcp.address }}
+            - name: ANVILKIT_API_MCP_ADDRESS
+              value: {{ .Values.mcp.address | quote }}
+            {{- end }}
             - name: ANVILKIT_API_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
+            {{- if .Values.telemetry.otlpEndpoint }}
+            - name: ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT
+              value: {{ .Values.telemetry.otlpEndpoint | quote }}
+            {{- end }}
+            {{- if .Values.telemetry.metricsPort }}
+            - name: ANVILKIT_API_TELEMETRY_METRICS_LISTEN
+              value: {{ printf "0.0.0.0:%d" (int .Values.telemetry.metricsPort) | quote }}
+            {{- end }}
             {{- if eq .Values.auth.mode "fixture" }}
             - name: ANVILKIT_API_PRINCIPALS_FILE
               value: {{ printf "/etc/anvilkit/principals/%s" .Values.auth.principalsSecret.key | quote }}
@@ -68,6 +84,11 @@ spec:
             - name: http
               containerPort: {{ .Values.listen.port }}
               protocol: TCP
+            {{- if .Values.telemetry.metricsPort }}
+            - name: metrics
+              containerPort: {{ .Values.telemetry.metricsPort }}
+              protocol: TCP
+            {{- end }}
           startupProbe:
             httpGet:
               path: /healthz
