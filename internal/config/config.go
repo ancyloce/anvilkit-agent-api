@@ -41,15 +41,65 @@ type HTTP struct {
 
 // Control is the gRPC dependency.
 type Control struct {
-	Address string `koanf:"address"`
+	Address  string         `koanf:"address"`
+	Identity ClientIdentity `koanf:"identity"`
 }
 
 // Owner is the placement of an owning service the API gateways to (P20:
 // Knowledge, MCP); an empty address leaves its endpoints answering
 // DEPENDENCY_UNAVAILABLE.
 type Owner struct {
-	Address string        `koanf:"address"`
-	Timeout time.Duration `koanf:"timeout"`
+	Address  string         `koanf:"address"`
+	Timeout  time.Duration  `koanf:"timeout"`
+	Identity ClientIdentity `koanf:"identity"`
+}
+
+// ClientIdentity is how one outbound gRPC connection authenticates (P0.1):
+// mtls presents the workload certificate (the files of MTLS, defaulting to
+// the process identity) and verifies the server by server_name;
+// development is plaintext and is admitted only with development.enabled.
+type ClientIdentity struct {
+	Mode string    `koanf:"mode"`
+	MTLS MTLSFiles `koanf:"mtls"`
+}
+
+// MTLSFiles names certificate, key, CA bundle and the expected server name
+// (a DNS SAN of the server certificate).
+type MTLSFiles struct {
+	CertFile   string `koanf:"cert_file"`
+	KeyFile    string `koanf:"key_file"`
+	CAFile     string `koanf:"ca_file"`
+	ServerName string `koanf:"server_name"`
+}
+
+// Identity is the process's own workload identity material (P0.1):
+// placements (ANVILKIT_API_IDENTITY_{CERT,KEY,CA}_FILE) every mtls client
+// block falls back to; watched and reloaded as a whole.
+type Identity struct {
+	CertFile       string        `koanf:"cert_file"`
+	KeyFile        string        `koanf:"key_file"`
+	CAFile         string        `koanf:"ca_file"`
+	ReloadInterval time.Duration `koanf:"reload_interval"`
+}
+
+// Development is the top-level DEVELOPMENT_ONLY guard: every plaintext
+// connection of this process requires both its own development mode and
+// Enabled; Enabled alone downgrades nothing. File-only.
+type Development struct {
+	Enabled bool `koanf:"enabled"`
+}
+
+// ClientTLS is the transport of an outbound connection whose server is not
+// an AnvilKit workload (the OTLP collector): development is plaintext
+// (admitted only with development.enabled), tls verifies the server
+// against ca_file and server_name, mtls additionally presents cert_file
+// and key_file.
+type ClientTLS struct {
+	Mode       string `koanf:"mode"`
+	CAFile     string `koanf:"ca_file"`
+	CertFile   string `koanf:"cert_file"`
+	KeyFile    string `koanf:"key_file"`
+	ServerName string `koanf:"server_name"`
 }
 
 // Auth selects the identity protocol. Only the DEVELOPMENT_ONLY "fixture"
@@ -88,9 +138,13 @@ type Telemetry struct {
 	OTLPEndpoint  string  `koanf:"otlp_endpoint"`
 	SampleRatio   float64 `koanf:"sample_ratio"`
 	MetricsListen string  `koanf:"metrics_listen"`
+	// OTLPTLS is validated only while an endpoint is placed.
+	OTLPTLS ClientTLS `koanf:"otlp_tls"`
 }
 
 type Config struct {
+	Development  Development  `koanf:"development"`
+	Identity     Identity     `koanf:"identity"`
 	Telemetry    Telemetry    `koanf:"telemetry"`
 	HTTP         HTTP         `koanf:"http"`
 	Control      Control      `koanf:"control"`
@@ -118,6 +172,12 @@ var defaults = map[string]any{
 	"mcp.timeout":               "60s",
 	"preparations.profile":      "preparation-v1",
 	"telemetry.sample_ratio":    1.0,
+	"development.enabled":       false,
+	"identity.reload_interval":  "5s",
+	"control.identity.mode":     "mtls",
+	"knowledge.identity.mode":   "mtls",
+	"mcp.identity.mode":         "mtls",
+	"telemetry.otlp_tls.mode":   "tls",
 }
 
 // envOverrides is the complete set of environment variables the service
@@ -132,6 +192,9 @@ var envOverrides = map[string]string{
 	"ANVILKIT_API_MCP_ADDRESS":              "mcp.address",
 	"ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT":  "telemetry.otlp_endpoint",
 	"ANVILKIT_API_TELEMETRY_METRICS_LISTEN": "telemetry.metrics_listen",
+	"ANVILKIT_API_IDENTITY_CERT_FILE":       "identity.cert_file",
+	"ANVILKIT_API_IDENTITY_KEY_FILE":        "identity.key_file",
+	"ANVILKIT_API_IDENTITY_CA_FILE":         "identity.ca_file",
 }
 
 // Load builds the snapshot from the file named by EnvConfigFile (or
@@ -251,5 +314,79 @@ func (c Config) validate() error {
 	if c.Artifacts.TransferWindow < time.Minute || c.Artifacts.TransferWindow > 24*time.Hour {
 		errs = append(errs, fmt.Errorf("artifacts.transfer_window %s outside [1m, 24h]", c.Artifacts.TransferWindow))
 	}
+	errs = append(errs, c.validateIdentity()...)
 	return errors.Join(errs...)
+}
+
+// validateIdentity checks the client identities, the top-level guard and
+// the collector transport (P0.1). A client under mtls resolves its files
+// through Resolved; an unresolved file is reported here.
+func (c Config) validateIdentity() []error {
+	var errs []error
+	if c.Identity.ReloadInterval < 100*time.Millisecond || c.Identity.ReloadInterval > time.Hour {
+		errs = append(errs, fmt.Errorf("identity.reload_interval %s outside [100ms, 1h]", c.Identity.ReloadInterval))
+	}
+	clients := map[string]ClientIdentity{"control": c.Control.Identity}
+	if c.Knowledge.Address != "" {
+		clients["knowledge"] = c.Knowledge.Identity
+	}
+	if c.MCP.Address != "" {
+		clients["mcp"] = c.MCP.Identity
+	}
+	for name, ci := range clients {
+		switch ci.Mode {
+		case "mtls":
+			m := c.Resolved(ci)
+			if m.CertFile == "" || m.KeyFile == "" || m.CAFile == "" {
+				errs = append(errs, fmt.Errorf("%s.identity.mtls needs cert_file, key_file and ca_file, or the process identity (ANVILKIT_API_IDENTITY_{CERT,KEY,CA}_FILE)", name))
+			}
+		case "development":
+			if !c.Development.Enabled {
+				errs = append(errs, fmt.Errorf("%s.identity.mode development (plaintext) requires development.enabled: true (DEVELOPMENT_ONLY)", name))
+			}
+		default:
+			errs = append(errs, fmt.Errorf("%s.identity.mode %q is not one of mtls, development", name, ci.Mode))
+		}
+	}
+	if c.Telemetry.OTLPEndpoint != "" {
+		errs = append(errs, c.Telemetry.OTLPTLS.validate("telemetry.otlp_tls", c.Development.Enabled)...)
+	}
+	return errs
+}
+
+// Resolved fills a client's mtls files from the process identity and its
+// server name from nothing (the caller supplies the target's name).
+func (c Config) Resolved(ci ClientIdentity) MTLSFiles {
+	m := ci.MTLS
+	if m.CertFile == "" {
+		m.CertFile = c.Identity.CertFile
+	}
+	if m.KeyFile == "" {
+		m.KeyFile = c.Identity.KeyFile
+	}
+	if m.CAFile == "" {
+		m.CAFile = c.Identity.CAFile
+	}
+	return m
+}
+
+func (t ClientTLS) validate(name string, development bool) []error {
+	var errs []error
+	switch t.Mode {
+	case "development":
+		if !development {
+			errs = append(errs, fmt.Errorf("%s.mode development (plaintext) requires development.enabled: true (DEVELOPMENT_ONLY)", name))
+		}
+	case "tls":
+		if t.CAFile == "" {
+			errs = append(errs, fmt.Errorf("%s.ca_file is required under %s.mode tls", name, name))
+		}
+	case "mtls":
+		if t.CAFile == "" || t.CertFile == "" || t.KeyFile == "" {
+			errs = append(errs, fmt.Errorf("%s.ca_file, cert_file and key_file are required under %s.mode mtls", name, name))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("%s.mode %q is not one of development, tls, mtls", name, t.Mode))
+	}
+	return errs
 }
