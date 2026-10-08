@@ -1,9 +1,5 @@
-{{- if not .Values.control.address }}
-{{- fail "control.address is required: the Control gRPC endpoint (ANVILKIT_API_CONTROL_ADDRESS)" }}
-{{- end }}
-{{- if and (eq .Values.auth.mode "fixture") (not .Values.auth.principalsSecret.name) }}
-{{- fail "auth.principalsSecret.name is required in fixture mode: an existing Secret holding the principals file (never created by this chart)" }}
-{{- end }}
+{{- include "anvilkit-agent-api.require" . -}}
+{{- $cfg := include "anvilkit-agent-api.config" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,7 +22,7 @@ spec:
         {{- end }}
       annotations:
         # A changed configuration file rolls the Pods.
-        checksum/config: {{ toYaml .Values.config | sha256sum }}
+        checksum/config: {{ $cfg | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -118,6 +114,16 @@ spec:
               mountPath: /etc/anvilkit/principals
               readOnly: true
             {{- end }}
+            {{- if eq .Values.identity.mode "mtls" }}
+            - name: identity
+              mountPath: /etc/anvilkit/identity
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.telemetry.otlpEndpoint (ne .Values.telemetry.otlpTls.mode "development") }}
+            - name: otlp-ca
+              mountPath: /etc/anvilkit/otlp-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -126,6 +132,20 @@ spec:
         - name: principals
           secret:
             secretName: {{ .Values.auth.principalsSecret.name }}
+        {{- end }}
+        {{- if eq .Values.identity.mode "mtls" }}
+        - name: identity
+          secret:
+            secretName: {{ include "anvilkit-agent-api.identitySecret" . }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if and .Values.telemetry.otlpEndpoint (ne .Values.telemetry.otlpTls.mode "development") }}
+        - name: otlp-ca
+          secret:
+            secretName: {{ .Values.telemetry.otlpTls.caSecret.name }}
+            items:
+              - key: {{ .Values.telemetry.otlpTls.caSecret.key }}
+                path: ca.crt
         {{- end }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:

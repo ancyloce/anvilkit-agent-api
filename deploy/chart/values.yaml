@@ -37,16 +37,47 @@ listen:
   port: 9100
 
 # The Control gRPC endpoint (ANVILKIT_API_CONTROL_ADDRESS); required.
+# serverName is the DNS SAN Control's certificate must carry under mtls
+# (default its service name).
 control:
   address: ""
+  serverName: anvilkit-agent-control
 
 # The Knowledge and MCP owners' gRPC endpoints (ANVILKIT_API_KNOWLEDGE_ADDRESS,
 # ANVILKIT_API_MCP_ADDRESS); empty leaves their endpoints answering
-# DEPENDENCY_UNAVAILABLE.
+# DEPENDENCY_UNAVAILABLE. serverName as for control.
 knowledge:
   address: ""
+  serverName: anvilkit-agent-knowledge
 mcp:
   address: ""
+  serverName: anvilkit-agent-mcp
+
+# The API's workload identity (P0.1): the certificate its three gRPC
+# clients present (Control, Knowledge, MCP) and verify their peers
+# against. The certificate is a cert-manager Certificate this chart renders
+# (certificate.create) from issuerRef, or an existing Secret (secretName,
+# keys tls.crt, tls.key, ca.crt) when create is false; the files are mounted
+# at /etc/anvilkit/identity and reloaded as a whole. mode development
+# renders plaintext clients and only with development.enabled: true.
+identity:
+  mode: mtls
+  trustDomain: ""
+  secretName: ""
+  certificate:
+    create: true
+    issuerRef:
+      name: ""
+      kind: ClusterIssuer
+      group: cert-manager.io
+    duration: 2160h
+    renewBefore: 720h
+
+# The top-level DEVELOPMENT_ONLY guard: every development transport
+# (identity.mode, telemetry.otlpTls.mode) renders only while this is true;
+# it downgrades nothing by itself.
+development:
+  enabled: false
 
 # The identity protocol (ANVILKIT_API_AUTH_MODE). Only the DEVELOPMENT_ONLY
 # "fixture" mode exists until ENV-07 supplies the IdP inputs; it reads the
@@ -137,3 +168,12 @@ podLabels: {}
 telemetry:
   otlpEndpoint: ""
   metricsPort: 0
+  # The collector transport while otlpEndpoint is set: tls verifies the
+  # collector against caSecret (key ca.crt) and serverName, mtls also presents
+  # the workload certificate, development is plaintext (development.enabled).
+  otlpTls:
+    mode: tls
+    serverName: ""
+    caSecret:
+      name: ""
+      key: ca.crt
