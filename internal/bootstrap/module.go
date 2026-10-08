@@ -45,7 +45,14 @@ func Module() fx.Option {
 			func(cfg config.Config) (application.Verifier, error) {
 				return fixtureauth.Load(cfg.Auth.PrincipalsFile)
 			},
-			func(cfg config.Config) (*control.Client, error) { return control.Dial(cfg.Control.Address) },
+			newIdentities,
+			func(cfg config.Config, ids *identities) (*control.Client, error) {
+				transport, err := ids.client("control", cfg.Control.Identity, "anvilkit-agent-control")
+				if err != nil {
+					return nil, err
+				}
+				return control.Dial(cfg.Control.Address, transport)
+			},
 			func(c *control.Client) application.Control { return c },
 			newGateways,
 			newTracer,
@@ -60,12 +67,16 @@ func Module() fx.Option {
 	)
 }
 
-// newGateways dials the placed owners (plaintext DEVELOPMENT_ONLY; mTLS is
-// ENV-03) and closes them on stop; an unplaced owner stays unavailable.
-func newGateways(lc fx.Lifecycle, cfg config.Config, log *slog.Logger) (httptransport.Gateways, error) {
+// newGateways dials the placed owners under their client identities and
+// closes them on stop; an unplaced owner stays unavailable.
+func newGateways(lc fx.Lifecycle, cfg config.Config, ids *identities, log *slog.Logger) (httptransport.Gateways, error) {
 	var gw httptransport.Gateways
 	if cfg.Knowledge.Address != "" {
-		k, err := knowledge.Dial(cfg.Knowledge.Address, cfg.Knowledge.Timeout)
+		transport, err := ids.client("knowledge", cfg.Knowledge.Identity, "anvilkit-agent-knowledge")
+		if err != nil {
+			return gw, err
+		}
+		k, err := knowledge.Dial(cfg.Knowledge.Address, cfg.Knowledge.Timeout, transport)
 		if err != nil {
 			return gw, err
 		}
@@ -75,7 +86,11 @@ func newGateways(lc fx.Lifecycle, cfg config.Config, log *slog.Logger) (httptran
 		log.Warn("no knowledge placement: API-07/08/09/13/14 answer DEPENDENCY_UNAVAILABLE (knowledge.address unset)")
 	}
 	if cfg.MCP.Address != "" {
-		m, err := mcp.Dial(cfg.MCP.Address, cfg.MCP.Timeout)
+		transport, err := ids.client("mcp", cfg.MCP.Identity, "anvilkit-agent-mcp")
+		if err != nil {
+			return gw, err
+		}
+		m, err := mcp.Dial(cfg.MCP.Address, cfg.MCP.Timeout, transport)
 		if err != nil {
 			return gw, err
 		}
