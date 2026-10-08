@@ -1,9 +1,24 @@
 # anvilkit-agent-api configuration (reviewed, secret-free). Loaded by
 # internal/config with precedence defaults < this file < allowed environment
 # overrides (ANVILKIT_API_LISTEN, ANVILKIT_API_CONTROL_ADDRESS,
-# ANVILKIT_API_AUTH_MODE, ANVILKIT_API_PRINCIPALS_FILE). Unknown keys fail
+# ANVILKIT_API_AUTH_MODE, ANVILKIT_API_PRINCIPALS_FILE,
+# ANVILKIT_API_IDENTITY_{CERT,KEY,CA}_FILE). Unknown keys fail
 # startup. Secrets never belong here; the fixture principals file is a
 # DEVELOPMENT_ONLY input supplied by path through the environment.
+#
+# development: the top-level DEVELOPMENT_ONLY guard (P0.1). This checked-in
+# file configures host-side runs on the development foundation, whose OTLP
+# collector is plaintext; every plaintext connection names its own
+# development mode as well. The guard downgrades nothing by itself: the
+# gRPC clients below stay mtls. The chart renders its own file with the
+# guard off.
+development:
+  enabled: true
+# identity: the process's workload certificate, key and CA bundle
+# (placements from the environment; .local/dev/certs on the foundation),
+# watched and reloaded as a whole; every mtls client below uses them.
+identity:
+  reload_interval: 5s
 http:
   listen: 127.0.0.1:9100
   read_header_timeout: 10s
@@ -11,13 +26,28 @@ http:
   shutdown_timeout: 20s
 control:
   address: 127.0.0.1:9101
+  # identity: mtls presents the workload certificate and verifies Control
+  # by server_name (a DNS SAN of its certificate); development is plaintext
+  # and needs development.enabled.
+  identity:
+    mode: mtls
+    mtls:
+      server_name: anvilkit-agent-control
 # knowledge / mcp (P20): the owners API-07..API-16 route to. Their addresses
 # are placements (ANVILKIT_API_KNOWLEDGE_ADDRESS, ANVILKIT_API_MCP_ADDRESS);
 # without one the owner's endpoints answer DEPENDENCY_UNAVAILABLE.
 knowledge:
   timeout: 30s
+  identity:
+    mode: mtls
+    mtls:
+      server_name: anvilkit-agent-knowledge
 mcp:
   timeout: 60s
+  identity:
+    mode: mtls
+    mtls:
+      server_name: anvilkit-agent-mcp
 auth:
   mode: fixture
 sse:
