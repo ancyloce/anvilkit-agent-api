@@ -34,5 +34,5 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: "v3.19.0"
-      - run: helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals
-      - run: helm template anvilkit-agent-api deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals > /dev/null
+      - run: helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer
+      - run: helm template anvilkit-agent-api deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer > /dev/null
