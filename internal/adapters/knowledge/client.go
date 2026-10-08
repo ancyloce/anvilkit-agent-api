@@ -1,8 +1,9 @@
 // Package knowledge is the API's grpc-go gateway to the Knowledge owner
 // (API-07/08/09/13/14; P20): public values in, SourceService,
 // RetrievalService and MemoryService under the principal's scope and
-// command identity, public values out. Transport identity (mTLS) is ENV-03;
-// the development profile dials plaintext.
+// command identity, public values out. The transport identity is the
+// workload's mTLS certificate (P0.1); plaintext exists only under the
+// development guard.
 package knowledge
 
 import (
@@ -12,7 +13,6 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/control"
@@ -29,8 +29,10 @@ type Client struct {
 	timeout   time.Duration
 }
 
-func Dial(address string, timeout time.Duration) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), grpc.WithTransportCredentials(insecure.NewCredentials()))
+// Dial connects with the given transport credential (the rotating workload
+// mTLS identity, or plaintext under the loader's development guard).
+func Dial(address string, timeout time.Duration, transport grpc.DialOption) (*Client, error) {
+	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), transport)
 	if err != nil {
 		return nil, err
 	}

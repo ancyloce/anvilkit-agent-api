@@ -2,8 +2,8 @@
 // 15/16; P20): public values in, CatalogService, GrantService and
 // CallService under the principal's scope and command identity, public
 // values out. Catalog visibility is never a grant; MCP decides every role.
-// Transport identity (mTLS) is ENV-03; the development profile dials
-// plaintext.
+// The transport identity is the workload's mTLS certificate (P0.1);
+// plaintext exists only under the development guard.
 package mcp
 
 import (
@@ -15,7 +15,6 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/control"
@@ -36,8 +35,10 @@ type Client struct {
 	timeout time.Duration
 }
 
-func Dial(address string, timeout time.Duration) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), grpc.WithTransportCredentials(insecure.NewCredentials()))
+// Dial connects with the given transport credential (the rotating workload
+// mTLS identity, or plaintext under the loader's development guard).
+func Dial(address string, timeout time.Duration, transport grpc.DialOption) (*Client, error) {
+	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), transport)
 	if err != nil {
 		return nil, err
 	}

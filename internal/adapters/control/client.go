@@ -1,7 +1,7 @@
 // Package control is the API's grpc-go client adapter for
-// anvilkit.control.v1.OperationService. Transport identity (mTLS) is an
-// ENV-03 deployment input; the development profile dials plaintext on
-// loopback.
+// anvilkit.control.v1.OperationService. The transport identity is the
+// workload's mTLS certificate (P0.1); plaintext exists only under the
+// development guard.
 package control
 
 import (
@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -29,8 +28,10 @@ type Client struct {
 	preparations controlv1.PreparationServiceClient
 }
 
-func Dial(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithUnaryInterceptor(boundRPCWait))
+// Dial connects with the given transport credential (the rotating workload
+// mTLS identity, or plaintext under the loader's development guard).
+func Dial(address string, transport grpc.DialOption) (*Client, error) {
+	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), transport, grpc.WithUnaryInterceptor(boundRPCWait))
 	if err != nil {
 		return nil, err
 	}
