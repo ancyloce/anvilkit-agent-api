@@ -48,8 +48,26 @@ mcp:
     mode: mtls
     mtls:
       server_name: anvilkit-agent-mcp
+# auth: the identity protocol (P0.3). oidc verifies bearer JWTs of the
+# issuer (discovery, its JWKS, the audience, the asymmetric algorithm
+# allowlist, exp/nbf under clock_skew) and maps the claims to tenant,
+# project, actor and roles. This host-side file names the DEVELOPMENT_ONLY
+# OIDC provider of deploy/dev (plaintext http, admitted by
+# development.enabled); ENV-07 supplies the production issuer, audience and
+# claim schema (ANVILKIT_API_AUTH_OIDC_ISSUER/_AUDIENCE). fixture (the
+# principals file) exists only behind development.enabled.
 auth:
-  mode: fixture
+  mode: oidc
+  oidc:
+    issuer: http://127.0.0.1:25556/anvilkit
+    audience: anvilkit-agent-api
+    algorithms: [RS256, ES256]
+    clock_skew: 30s
+    claims:
+      tenant: tenant
+      project: project
+      actor: sub
+      roles: roles
 sse:
   heartbeat_interval: 15s
   frame_buffer: 64
