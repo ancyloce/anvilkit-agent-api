@@ -18,7 +18,7 @@ func write(t *testing.T, body string) string {
 	return path
 }
 
-const minimal = "control:\n  address: 127.0.0.1:9101\nauth:\n  mode: fixture\n"
+const minimal = "control:\n  address: 127.0.0.1:9101\nauth:\n  oidc:\n    issuer: https://idp.example.invalid/anvilkit\n"
 
 var env = []string{"ANVILKIT_API_PRINCIPALS_FILE=/run/principals.json", "HOME=/root", "ANVILKIT_CONTROL_LISTEN=ignored-other-service",
 	"ANVILKIT_API_IDENTITY_CERT_FILE=/etc/anvilkit/identity/tls.crt", "ANVILKIT_API_IDENTITY_KEY_FILE=/etc/anvilkit/identity/tls.key", "ANVILKIT_API_IDENTITY_CA_FILE=/etc/anvilkit/identity/ca.crt"}
@@ -31,7 +31,9 @@ func TestPrecedenceDefaultsFileEnvironment(t *testing.T) {
 	require.Equal(t, 8, c.SSE.FrameBuffer, "file overrides the default")
 	require.Equal(t, 15*time.Second, c.SSE.HeartbeatInterval, "default kept")
 	require.Equal(t, int64(256<<10), c.HTTP.BodyLimitBytes)
-	require.Equal(t, "/run/principals.json", c.Auth.PrincipalsFile)
+	require.Equal(t, "oidc", c.Auth.Mode, "the identity protocol defaults to an OIDC issuer")
+	require.Equal(t, "anvilkit-agent-api", c.Auth.OIDC.Audience)
+	require.Equal(t, []string{"RS256", "ES256"}, c.Auth.OIDC.Algorithms)
 	require.Equal(t, "127.0.0.1:9101", c.Control.Address)
 }
 
@@ -40,7 +42,8 @@ func TestPrecedenceDefaultsFileEnvironment(t *testing.T) {
 func TestCheckedInFileLoads(t *testing.T) {
 	c, err := config.LoadFrom(filepath.Join("..", "..", "config.yaml"), env)
 	require.NoError(t, err)
-	require.Equal(t, "fixture", c.Auth.Mode)
+	require.Equal(t, "oidc", c.Auth.Mode)
+	require.True(t, c.Development.Enabled, "the host-side file reaches the development OIDC provider over http")
 }
 
 func TestUnknownKeysAreRejected(t *testing.T) {
@@ -58,14 +61,14 @@ func TestMissingFileFails(t *testing.T) {
 }
 
 func TestRequiredValues(t *testing.T) {
-	_, err := config.LoadFrom(write(t, "auth:\n  mode: fixture\n"), env)
+	_, err := config.LoadFrom(write(t, "auth:\n  oidc:\n    issuer: https://idp.example.invalid/anvilkit\n"), env)
 	require.ErrorContains(t, err, "control.address is required")
 	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\n"), env)
-	require.ErrorContains(t, err, "auth.mode is required")
-	_, err = config.LoadFrom(write(t, minimal), []string{})
+	require.ErrorContains(t, err, "auth.oidc.issuer is required")
+	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\ndevelopment:\n  enabled: true\nauth:\n  mode: fixture\n"), []string{"ANVILKIT_API_IDENTITY_CERT_FILE=/c", "ANVILKIT_API_IDENTITY_KEY_FILE=/k", "ANVILKIT_API_IDENTITY_CA_FILE=/a"})
 	require.ErrorContains(t, err, "auth.principals_file is required")
-	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\nauth:\n  mode: oidc\n"), env)
-	require.ErrorContains(t, err, "not implemented")
+	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\nauth:\n  mode: saml\n"), env)
+	require.ErrorContains(t, err, "not one of oidc, fixture")
 }
 
 func TestRangesAndCrossFieldRules(t *testing.T) {
@@ -106,18 +109,18 @@ func TestClientIdentityAndDevelopmentGuard(t *testing.T) {
 
 	_, err = config.LoadFrom(write(t, minimal), env[:3])
 	require.ErrorContains(t, err, "control.identity.mtls needs cert_file, key_file and ca_file")
-	c, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\n  identity:\n    mtls:\n      cert_file: /c\n      key_file: /k\n      ca_file: /ca\nauth:\n  mode: fixture\n"), env[:3])
+	c, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\n  identity:\n    mtls:\n      cert_file: /c\n      key_file: /k\n      ca_file: /ca\nauth:\n  oidc:\n    issuer: https://idp.example.invalid/anvilkit\n"), env[:3])
 	require.NoError(t, err, "a client may name its own files")
 	require.Equal(t, "/k", c.Resolved(c.Control.Identity).KeyFile)
 
-	dev := "control:\n  address: 127.0.0.1:9101\n  identity:\n    mode: development\nauth:\n  mode: fixture\n"
+	dev := "control:\n  address: 127.0.0.1:9101\n  identity:\n    mode: development\nauth:\n  oidc:\n    issuer: https://idp.example.invalid/anvilkit\n"
 	_, err = config.LoadFrom(write(t, dev), env)
 	require.ErrorContains(t, err, "control.identity.mode development (plaintext) requires development.enabled")
 	c, err = config.LoadFrom(write(t, dev+"development:\n  enabled: true\n"), append(env, "ANVILKIT_API_KNOWLEDGE_ADDRESS=127.0.0.1:9105"))
 	require.NoError(t, err)
 	require.Equal(t, "development", c.Control.Identity.Mode)
 	require.Equal(t, "mtls", c.Knowledge.Identity.Mode, "the guard does not downgrade other connections")
-	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\n  identity:\n    mode: plaintext\nauth:\n  mode: fixture\n"), env)
+	_, err = config.LoadFrom(write(t, "control:\n  address: 127.0.0.1:9101\n  identity:\n    mode: plaintext\nauth:\n  oidc:\n    issuer: https://idp.example.invalid/anvilkit\n"), env)
 	require.ErrorContains(t, err, "control.identity.mode")
 	_, err = config.LoadFrom(write(t, minimal+"development:\n  enabled: true\n"), append(env, "ANVILKIT_API_DEVELOPMENT_ENABLED=true"))
 	require.ErrorContains(t, err, "not allowed overrides", "the guard is file-only")
@@ -128,4 +131,32 @@ func TestClientIdentityAndDevelopmentGuard(t *testing.T) {
 	require.ErrorContains(t, err, "telemetry.otlp_tls.mode development (plaintext) requires development.enabled")
 	_, err = config.LoadFrom(write(t, minimal+"telemetry:\n  otlp_tls:\n    ca_file: /ca\n"), append(env, "ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT=collector:4317"))
 	require.NoError(t, err)
+}
+
+// P0.3 AC2: the identity protocol is an OIDC issuer; the DEVELOPMENT_ONLY
+// principals file and a plaintext issuer exist only behind the file's
+// development guard; the algorithm allowlist admits asymmetric JWS only.
+func TestIdentityProtocol(t *testing.T) {
+	base := "control:\n  address: 127.0.0.1:9101\n"
+	_, err := config.LoadFrom(write(t, base+"auth:\n  mode: fixture\n"), env)
+	require.ErrorContains(t, err, "auth.mode fixture (the principals file) requires development.enabled")
+	c, err := config.LoadFrom(write(t, base+"development:\n  enabled: true\nauth:\n  mode: fixture\n"), env)
+	require.NoError(t, err)
+	require.Equal(t, "fixture", c.Auth.Mode)
+	_, err = config.LoadFrom(write(t, base+"auth:\n  oidc:\n    issuer: http://127.0.0.1:25556/anvilkit\n"), env)
+	require.ErrorContains(t, err, "auth.oidc.issuer over http:// requires development.enabled")
+	_, err = config.LoadFrom(write(t, base+"development:\n  enabled: true\nauth:\n  oidc:\n    issuer: http://127.0.0.1:25556/anvilkit\n"), env)
+	require.NoError(t, err)
+	for _, alg := range []string{"none", "HS256"} {
+		_, err = config.LoadFrom(write(t, minimal+"    algorithms: ["+alg+"]\n"), env)
+		require.ErrorContains(t, err, "is not an asymmetric JWS algorithm", alg)
+	}
+	_, err = config.LoadFrom(write(t, minimal+"    clock_skew: 10m\n"), env)
+	require.ErrorContains(t, err, "auth.oidc.clock_skew")
+	_, err = config.LoadFrom(write(t, minimal+"    claims:\n      tenant: \"\"\n"), env)
+	require.ErrorContains(t, err, "auth.oidc.claims.tenant and auth.oidc.claims.actor are required")
+	c, err = config.LoadFrom(write(t, base), append(env, "ANVILKIT_API_AUTH_OIDC_ISSUER=https://idp.example.invalid/tenants", "ANVILKIT_API_AUTH_OIDC_AUDIENCE=api://anvilkit"))
+	require.NoError(t, err)
+	require.Equal(t, "https://idp.example.invalid/tenants", c.Auth.OIDC.Issuer)
+	require.Equal(t, "api://anvilkit", c.Auth.OIDC.Audience)
 }

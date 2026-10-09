@@ -199,13 +199,17 @@ func requestID() gin.HandlerFunc {
 
 func authenticate(v application.Verifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// RFC 6750 §3: a missing token names the scheme, a refused one
+		// invalid_token; neither says why the token was refused.
 		h := c.GetHeader("Authorization")
 		if !strings.HasPrefix(h, "Bearer ") || len(h) <= 7 {
+			c.Header("WWW-Authenticate", `Bearer realm="anvilkit"`)
 			fail(c, &apiError{status: http.StatusUnauthorized, code: "UNAUTHENTICATED", message: "bearer token required"})
 			return
 		}
 		p, err := v.Verify(c.Request.Context(), strings.TrimPrefix(h, "Bearer "))
 		if err != nil {
+			c.Header("WWW-Authenticate", `Bearer realm="anvilkit", error="invalid_token"`)
 			fail(c, &apiError{status: http.StatusUnauthorized, code: "UNAUTHENTICATED", message: "token not accepted"})
 			return
 		}

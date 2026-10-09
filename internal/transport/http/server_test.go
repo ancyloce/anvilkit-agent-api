@@ -381,6 +381,10 @@ func TestAPI(t *testing.T) {
 	require.Equal(t, 401, status)
 	require.Equal(t, "UNAUTHENTICATED", errorCode(out))
 	require.Equal(t, hdr.Get("X-Request-Id"), out["error"].(map[string]any)["requestId"], "the envelope carries the request id")
+	require.Equal(t, `Bearer realm="anvilkit"`, hdr.Get("WWW-Authenticate"), "a missing token names the scheme (RFC 6750)")
+	status, _, hdr = do(t, ts, "GET", "/api/v1/operations/op_1", "not-a-known-token-0123456789", "")
+	require.Equal(t, 401, status)
+	require.Equal(t, `Bearer realm="anvilkit", error="invalid_token"`, hdr.Get("WWW-Authenticate"))
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"c1","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"`+digest+`"},"tenantId":"tenant_b"}`)
 	require.Equal(t, 400, status, "unknown member rejected by the OpenAPI validator: %v", out)

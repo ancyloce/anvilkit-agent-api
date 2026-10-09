@@ -9,6 +9,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -102,12 +103,43 @@ type ClientTLS struct {
 	ServerName string `koanf:"server_name"`
 }
 
-// Auth selects the identity protocol. Only the DEVELOPMENT_ONLY "fixture"
-// mode exists until ENV-07 supplies the IdP inputs.
+// Auth selects the identity protocol (P0.3): oidc verifies bearer JWTs of
+// one OpenID Connect issuer (ENV-07 supplies the production issuer,
+// audience and claim schema); fixture is the DEVELOPMENT_ONLY principals
+// file, admitted only with development.enabled.
 type Auth struct {
 	Mode           string `koanf:"mode"`
 	PrincipalsFile string `koanf:"principals_file"`
+	OIDC           OIDC   `koanf:"oidc"`
 }
+
+// OIDC is one issuer: discovery and its key set, the audience, the signing
+// algorithm allowlist, the bounded clock skew of exp/nbf and the claim
+// paths of the principal. An http:// issuer is DEVELOPMENT_ONLY.
+type OIDC struct {
+	Issuer     string        `koanf:"issuer"`
+	Audience   string        `koanf:"audience"`
+	Algorithms []string      `koanf:"algorithms"`
+	ClockSkew  time.Duration `koanf:"clock_skew"`
+	// CAFile verifies the issuer's TLS server (empty: the system roots).
+	CAFile  string        `koanf:"ca_file"`
+	Timeout time.Duration `koanf:"timeout"`
+	Claims  OIDCClaims    `koanf:"claims"`
+}
+
+// OIDCClaims names the claim (or dot-separated path) of each principal
+// field; tenant and actor are required, an empty project or roles path
+// reads none.
+type OIDCClaims struct {
+	Tenant  string `koanf:"tenant"`
+	Project string `koanf:"project"`
+	Actor   string `koanf:"actor"`
+	Roles   string `koanf:"roles"`
+}
+
+// signingAlgorithms are the asymmetric JWS algorithms a configuration may
+// allow; "none" and the HMAC family never verify an issuer's token.
+var signingAlgorithms = map[string]bool{"RS256": true, "RS384": true, "RS512": true, "ES256": true, "ES384": true, "ES512": true, "PS256": true, "PS384": true, "PS512": true, "EdDSA": true}
 
 // SSE bounds the event stream transport (contracts.md §6): they are
 // transport limits, never business clocks.
@@ -178,6 +210,15 @@ var defaults = map[string]any{
 	"knowledge.identity.mode":   "mtls",
 	"mcp.identity.mode":         "mtls",
 	"telemetry.otlp_tls.mode":   "tls",
+	"auth.mode":                 "oidc",
+	"auth.oidc.audience":        "anvilkit-agent-api",
+	"auth.oidc.algorithms":      []string{"RS256", "ES256"},
+	"auth.oidc.clock_skew":      "30s",
+	"auth.oidc.timeout":         "10s",
+	"auth.oidc.claims.tenant":   "tenant",
+	"auth.oidc.claims.project":  "project",
+	"auth.oidc.claims.actor":    "sub",
+	"auth.oidc.claims.roles":    "roles",
 }
 
 // envOverrides is the complete set of environment variables the service
@@ -188,6 +229,9 @@ var envOverrides = map[string]string{
 	"ANVILKIT_API_CONTROL_ADDRESS":          "control.address",
 	"ANVILKIT_API_AUTH_MODE":                "auth.mode",
 	"ANVILKIT_API_PRINCIPALS_FILE":          "auth.principals_file",
+	"ANVILKIT_API_AUTH_OIDC_ISSUER":         "auth.oidc.issuer",
+	"ANVILKIT_API_AUTH_OIDC_AUDIENCE":       "auth.oidc.audience",
+	"ANVILKIT_API_AUTH_OIDC_CA_FILE":        "auth.oidc.ca_file",
 	"ANVILKIT_API_KNOWLEDGE_ADDRESS":        "knowledge.address",
 	"ANVILKIT_API_MCP_ADDRESS":              "mcp.address",
 	"ANVILKIT_API_TELEMETRY_OTLP_ENDPOINT":  "telemetry.otlp_endpoint",
@@ -284,12 +328,15 @@ func (c Config) validate() error {
 		errs = append(errs, fmt.Errorf("http.shutdown_timeout %s outside [1s, 5m]", c.HTTP.ShutdownTimeout))
 	}
 	switch c.Auth.Mode {
+	case "oidc":
+		errs = append(errs, c.Auth.OIDC.validate(c.Development.Enabled)...)
 	case "fixture":
+		if !c.Development.Enabled {
+			errs = append(errs, errors.New("auth.mode fixture (the principals file) requires development.enabled: true (DEVELOPMENT_ONLY); production verifies an OIDC issuer"))
+		}
 		req("auth.principals_file", c.Auth.PrincipalsFile)
-	case "":
-		errs = append(errs, errors.New("auth.mode is required: only the DEVELOPMENT_ONLY value \"fixture\" exists until ENV-07 supplies the IdP protocol"))
 	default:
-		errs = append(errs, fmt.Errorf("auth.mode %q is not implemented", c.Auth.Mode))
+		errs = append(errs, fmt.Errorf("auth.mode %q is not one of oidc, fixture", c.Auth.Mode))
 	}
 	if c.SSE.HeartbeatInterval < time.Second || c.SSE.HeartbeatInterval > 5*time.Minute {
 		errs = append(errs, fmt.Errorf("sse.heartbeat_interval %s outside [1s, 5m]", c.SSE.HeartbeatInterval))
@@ -387,6 +434,40 @@ func (t ClientTLS) validate(name string, development bool) []error {
 		}
 	default:
 		errs = append(errs, fmt.Errorf("%s.mode %q is not one of development, tls, mtls", name, t.Mode))
+	}
+	return errs
+}
+
+func (o OIDC) validate(development bool) []error {
+	var errs []error
+	u, err := url.Parse(o.Issuer)
+	switch {
+	case o.Issuer == "":
+		errs = append(errs, errors.New("auth.oidc.issuer is required under auth.mode oidc (ENV-07)"))
+	case err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http"):
+		errs = append(errs, fmt.Errorf("auth.oidc.issuer %q is not an absolute https URL", o.Issuer))
+	case u.Scheme == "http" && !development:
+		errs = append(errs, errors.New("auth.oidc.issuer over http:// requires development.enabled: true (DEVELOPMENT_ONLY)"))
+	}
+	if o.Audience == "" {
+		errs = append(errs, errors.New("auth.oidc.audience is required"))
+	}
+	if len(o.Algorithms) == 0 {
+		errs = append(errs, errors.New("auth.oidc.algorithms names at least one signing algorithm"))
+	}
+	for _, a := range o.Algorithms {
+		if !signingAlgorithms[a] {
+			errs = append(errs, fmt.Errorf("auth.oidc.algorithms: %q is not an asymmetric JWS algorithm", a))
+		}
+	}
+	if o.ClockSkew < 0 || o.ClockSkew > 5*time.Minute {
+		errs = append(errs, fmt.Errorf("auth.oidc.clock_skew %s outside [0, 5m]", o.ClockSkew))
+	}
+	if o.Timeout < time.Second || o.Timeout > time.Minute {
+		errs = append(errs, fmt.Errorf("auth.oidc.timeout %s outside [1s, 1m]", o.Timeout))
+	}
+	if o.Claims.Tenant == "" || o.Claims.Actor == "" {
+		errs = append(errs, errors.New("auth.oidc.claims.tenant and auth.oidc.claims.actor are required"))
 	}
 	return errs
 }
