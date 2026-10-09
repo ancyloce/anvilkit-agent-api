@@ -62,7 +62,19 @@ func toPreview(p *controlv1.Preview) agentapi.Preview {
 	return out
 }
 
+// authorize reads the operation under the user's scope first (P0.3): the
+// preview, release and source reads name a tenant only, so Control's
+// project and role rule of the scoped read decides whether the user may
+// see the operation at all; another project's operation is not found.
+func (c *Client) authorize(ctx context.Context, p application.Principal, operationID string) error {
+	_, err := c.ops.GetOperation(ctx, &controlv1.GetOperationRequest{Scope: scope(p), OperationId: operationID})
+	return mapErr(err)
+}
+
 func (c *Client) preview(ctx context.Context, p application.Principal, operationID string) (*controlv1.Preview, error) {
+	if err := c.authorize(ctx, p, operationID); err != nil {
+		return nil, err
+	}
 	resp, err := controlv1.NewPreviewServiceClient(c.conn).GetPreview(ctx, &controlv1.GetPreviewRequest{TenantId: p.TenantID, OperationId: operationID})
 	if err != nil {
 		return nil, mapErr(err)
@@ -96,7 +108,7 @@ func (c *Client) ReadPreviewArtifact(ctx context.Context, p application.Principa
 	if err != nil || size < 0 || size > maxPreviewArtifact {
 		return application.PreviewBytes{}, &application.ControlError{Code: "INVALID_ARGUMENT", Message: "preview artifact exceeds the bound"}
 	}
-	body, err := c.readVerified(ctx, ref.GetHandle(), operationID, digest, size)
+	body, err := c.readVerified(ctx, p.TenantID, ref.GetHandle(), operationID, digest, size)
 	if err != nil {
 		return application.PreviewBytes{}, err
 	}
@@ -107,6 +119,9 @@ func (c *Client) ReadPreviewArtifact(ctx context.Context, p application.Principa
 const maxSourceArchive = 16 << 20
 
 func (c *Client) ReadSource(ctx context.Context, p application.Principal, operationID string) (application.SourceBytes, error) {
+	if err := c.authorize(ctx, p, operationID); err != nil {
+		return application.SourceBytes{}, err
+	}
 	resp, err := controlv1.NewPreviewServiceClient(c.conn).GetSource(ctx, &controlv1.GetSourceRequest{TenantId: p.TenantID, OperationId: operationID})
 	if err != nil {
 		return application.SourceBytes{}, mapErr(err)
@@ -116,7 +131,7 @@ func (c *Client) ReadSource(ctx context.Context, p application.Principal, operat
 	if err != nil || size < 0 || size > maxSourceArchive {
 		return application.SourceBytes{}, &application.ControlError{Code: "INVALID_ARGUMENT", Message: "source archive exceeds the bound"}
 	}
-	body, err := c.readVerified(ctx, src.GetHandle(), operationID, src.GetDigest(), size)
+	body, err := c.readVerified(ctx, p.TenantID, src.GetHandle(), operationID, src.GetDigest(), size)
 	if err != nil {
 		return application.SourceBytes{}, err
 	}
@@ -126,8 +141,8 @@ func (c *Client) ReadSource(ctx context.Context, p application.Principal, operat
 // readVerified fetches one artifact through Control's one-GET read
 // capability (no redirects) and returns its bytes only when they have the
 // recorded size and digest.
-func (c *Client) readVerified(ctx context.Context, handle, operationID, digest string, size int64) ([]byte, error) {
-	read, err := c.artifacts.ReadArtifact(ctx, &controlv1.ReadArtifactRequest{Handle: handle, OperationId: operationID})
+func (c *Client) readVerified(ctx context.Context, tenantID, handle, operationID, digest string, size int64) ([]byte, error) {
+	read, err := c.artifacts.ReadArtifact(ctx, &controlv1.ReadArtifactRequest{Handle: handle, OperationId: operationID, TenantId: tenantID})
 	if err != nil {
 		return nil, mapErr(err)
 	}

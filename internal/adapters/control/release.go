@@ -63,6 +63,9 @@ func toRelease(r *controlv1.Release) agentapi.Release {
 }
 
 func (c *Client) GetRelease(ctx context.Context, p application.Principal, operationID string) (application.ReleaseView, error) {
+	if err := c.authorize(ctx, p, operationID); err != nil {
+		return application.ReleaseView{}, err
+	}
 	resp, err := controlv1.NewReleaseServiceClient(c.conn).GetRelease(ctx, &controlv1.GetReleaseRequest{TenantId: p.TenantID, OperationId: operationID})
 	if err != nil {
 		return application.ReleaseView{}, mapErr(err)

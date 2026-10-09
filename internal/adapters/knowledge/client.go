@@ -43,7 +43,7 @@ func Dial(address string, timeout time.Duration, transport grpc.DialOption) (*Cl
 func (c *Client) Close() error { return c.conn.Close() }
 
 func scope(p application.Principal) *knowledgev1.Scope {
-	return &knowledgev1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID}
+	return &knowledgev1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID, Roles: p.Roles}
 }
 
 func command(cmd application.CommandIdentity) *knowledgev1.CommandIdentity {

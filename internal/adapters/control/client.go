@@ -49,7 +49,7 @@ func boundRPCWait(ctx context.Context, method string, req, reply any, cc *grpc.C
 func (c *Client) Close() error { return c.conn.Close() }
 
 func scope(p application.Principal) *controlv1.Scope {
-	return &controlv1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID}
+	return &controlv1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID, Roles: p.Roles}
 }
 
 func command(cmd application.CommandIdentity) *controlv1.CommandIdentity {

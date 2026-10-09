@@ -52,7 +52,7 @@ func (c *Client) ctx(ctx context.Context) (context.Context, context.CancelFunc) 
 }
 
 func scope(p application.Principal) *mcpv1.Scope {
-	return &mcpv1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID}
+	return &mcpv1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID, Roles: p.Roles}
 }
 
 func command(cmd application.CommandIdentity) *mcpv1.CommandIdentity {
