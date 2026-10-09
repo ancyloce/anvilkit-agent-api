@@ -114,6 +114,11 @@ spec:
               mountPath: /etc/anvilkit/principals
               readOnly: true
             {{- end }}
+            {{- if and (eq .Values.auth.mode "oidc") .Values.auth.oidc.caSecret }}
+            - name: oidc-ca
+              mountPath: /etc/anvilkit/oidc-ca
+              readOnly: true
+            {{- end }}
             {{- if eq .Values.identity.mode "mtls" }}
             - name: identity
               mountPath: /etc/anvilkit/identity
@@ -132,6 +137,14 @@ spec:
         - name: principals
           secret:
             secretName: {{ .Values.auth.principalsSecret.name }}
+        {{- end }}
+        {{- if and (eq .Values.auth.mode "oidc") .Values.auth.oidc.caSecret }}
+        - name: oidc-ca
+          secret:
+            secretName: {{ .Values.auth.oidc.caSecret }}
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
         {{- if eq .Values.identity.mode "mtls" }}
         - name: identity

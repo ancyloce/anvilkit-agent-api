@@ -79,11 +79,29 @@ identity:
 development:
   enabled: false
 
-# The identity protocol (ANVILKIT_API_AUTH_MODE). Only the DEVELOPMENT_ONLY
-# "fixture" mode exists until ENV-07 supplies the IdP inputs; it reads the
-# principals file from an existing Secret that this chart never creates.
+# The identity protocol (ANVILKIT_API_AUTH_MODE). oidc verifies bearer JWTs
+# of auth.oidc.issuer: discovery and its JWKS, the audience, the signing
+# algorithm allowlist and exp/nbf under clockSkew; the claim paths map the
+# token to tenant, project, actor and roles (ENV-07 supplies the production
+# issuer, audience and claim schema). An http:// issuer renders only with
+# development.enabled. fixture is the DEVELOPMENT_ONLY principals file read
+# from an existing Secret this chart never creates; it renders only with
+# development.enabled: true.
 auth:
-  mode: fixture
+  mode: oidc
+  oidc:
+    issuer: ""
+    audience: anvilkit-agent-api
+    algorithms: [RS256, ES256]
+    clockSkew: 30s
+    # An existing Secret whose ca.crt verifies the issuer's TLS server
+    # (empty: the system roots).
+    caSecret: ""
+    claims:
+      tenant: tenant
+      project: project
+      actor: sub
+      roles: roles
   principalsSecret:
     name: ""
     key: principals.json
@@ -99,8 +117,6 @@ config:
     shutdown_timeout: 20s
   control:
     address: 127.0.0.1:9101
-  auth:
-    mode: fixture
   sse:
     heartbeat_interval: 15s
     frame_buffer: 64

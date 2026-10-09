@@ -49,6 +49,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if not .Values.control.address }}
 {{- fail "control.address is required: the Control gRPC endpoint (ANVILKIT_API_CONTROL_ADDRESS)" }}
 {{- end }}
+{{- if not (has .Values.auth.mode (list "oidc" "fixture")) }}
+{{- fail "auth.mode must be oidc or fixture" }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "fixture") (not .Values.development.enabled) }}
+{{- fail "auth.mode fixture is DEVELOPMENT_ONLY: it renders only with development.enabled: true; production verifies an OIDC issuer (auth.mode oidc)" }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.oidc.issuer) }}
+{{- fail "auth.oidc.issuer is required in oidc mode (ENV-07)" }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "oidc") (hasPrefix "http://" .Values.auth.oidc.issuer) (not .Values.development.enabled) }}
+{{- fail "auth.oidc.issuer over http:// is DEVELOPMENT_ONLY: it renders only with development.enabled: true" }}
+{{- end }}
 {{- if and (eq .Values.auth.mode "fixture") (not .Values.auth.principalsSecret.name) }}
 {{- fail "auth.principalsSecret.name is required in fixture mode: an existing Secret holding the principals file (never created by this chart)" }}
 {{- end }}
@@ -99,6 +111,12 @@ the loader's keys. */}}
 {{- $_ = set $cfg "identity" (dict "cert_file" "/etc/anvilkit/identity/tls.crt" "key_file" "/etc/anvilkit/identity/tls.key" "ca_file" "/etc/anvilkit/identity/ca.crt") }}
 {{- end -}}
 {{- $_ = set $cfg.control "identity" (dict "mode" .Values.identity.mode "mtls" (dict "server_name" .Values.control.serverName)) -}}
+{{- if eq .Values.auth.mode "oidc" }}
+{{- $o := .Values.auth.oidc -}}
+{{- $oidc := dict "issuer" $o.issuer "audience" $o.audience "algorithms" $o.algorithms "clock_skew" $o.clockSkew "claims" $o.claims -}}
+{{- if $o.caSecret }}{{- $_ = set $oidc "ca_file" "/etc/anvilkit/oidc-ca/ca.crt" }}{{- end }}
+{{- $_ = set $cfg "auth" (dict "mode" "oidc" "oidc" $oidc) -}}
+{{- end -}}
 {{- $_ = set $cfg "knowledge" (merge (dict "identity" (dict "mode" .Values.identity.mode "mtls" (dict "server_name" .Values.knowledge.serverName))) (default (dict) $cfg.knowledge)) -}}
 {{- $_ = set $cfg "mcp" (merge (dict "identity" (dict "mode" .Values.identity.mode "mtls" (dict "server_name" .Values.mcp.serverName))) (default (dict) $cfg.mcp)) -}}
 {{- if .Values.telemetry.otlpEndpoint }}
