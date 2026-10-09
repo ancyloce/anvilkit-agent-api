@@ -5,8 +5,13 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
@@ -16,6 +21,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/fixtureauth"
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/knowledge"
 	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/mcp"
+	"github.com/ancyloce/anvilkit-agent-api/internal/adapters/oidcauth"
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 	"github.com/ancyloce/anvilkit-agent-api/internal/config"
 	httptransport "github.com/ancyloce/anvilkit-agent-api/internal/transport/http"
@@ -42,9 +48,7 @@ func Module() fx.Option {
 			func() *slog.Logger {
 				return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			},
-			func(cfg config.Config) (application.Verifier, error) {
-				return fixtureauth.Load(cfg.Auth.PrincipalsFile)
-			},
+			newVerifier,
 			newIdentities,
 			func(cfg config.Config, ids *identities) (*control.Client, error) {
 				transport, err := ids.client("control", cfg.Control.Identity, "anvilkit-agent-control")
@@ -129,4 +133,44 @@ func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptranspor
 			return err
 		},
 	})
+}
+
+// newVerifier is the identity protocol of the configuration (P0.3): the
+// issuer's discovery runs once at startup and a refusal stops the process,
+// so the API never serves without a verifier. fixture exists only behind
+// development.enabled (the loader refuses it otherwise).
+func newVerifier(cfg config.Config, log *slog.Logger) (application.Verifier, error) {
+	if cfg.Auth.Mode == "fixture" {
+		log.Warn("DEVELOPMENT_ONLY identity: bearer principals file; qualifies no production identity")
+		return fixtureauth.Load(cfg.Auth.PrincipalsFile)
+	}
+	o := cfg.Auth.OIDC
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	if o.CAFile != "" {
+		pem, err := os.ReadFile(o.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("auth.oidc.ca_file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("auth.oidc.ca_file %s holds no certificate", o.CAFile)
+		}
+		transport.TLSClientConfig.RootCAs = pool
+	}
+	if strings.HasPrefix(o.Issuer, "http://") {
+		log.Warn("DEVELOPMENT_ONLY identity: the OIDC issuer is reached over plaintext http", "issuer", o.Issuer)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), o.Timeout)
+	defer cancel()
+	v, err := oidcauth.New(ctx, oidcauth.Options{
+		Issuer: o.Issuer, Audience: o.Audience, Algorithms: o.Algorithms, ClockSkew: o.ClockSkew,
+		Claims:     oidcauth.Claims{Tenant: o.Claims.Tenant, Project: o.Claims.Project, Actor: o.Claims.Actor, Roles: o.Claims.Roles},
+		HTTPClient: &http.Client{Timeout: o.Timeout, Transport: transport},
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Info("identity verifier", "mode", "oidc", "issuer", o.Issuer, "audience", o.Audience, "algorithms", o.Algorithms)
+	return v, nil
 }
