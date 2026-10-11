@@ -7,6 +7,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -47,6 +49,19 @@ func boundRPCWait(ctx context.Context, method string, req, reply any, cc *grpc.C
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
+
+// Health asks Control's gRPC health service (P1.4): the API's readiness
+// follows it.
+func (c *Client) Health(ctx context.Context) error {
+	resp, err := grpc_health_v1.NewHealthClient(c.conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+	if err != nil {
+		return err
+	}
+	if resp.GetStatus() != grpc_health_v1.HealthCheckResponse_SERVING {
+		return fmt.Errorf("control health %s", resp.GetStatus())
+	}
+	return nil
+}
 
 func scope(p application.Principal) *controlv1.Scope {
 	return &controlv1.Scope{TenantId: p.TenantID, ProjectId: p.ProjectID, ActorId: p.ActorID, Roles: p.Roles}
