@@ -36,6 +36,7 @@ func ServerOptions(cfg config.Config) httptransport.Options {
 		Stream: httptransport.StreamBounds{
 			HeartbeatInterval: cfg.SSE.HeartbeatInterval, FrameBuffer: cfg.SSE.FrameBuffer,
 			SlowConsumerGrace: cfg.SSE.SlowConsumerGrace, WriteTimeout: cfg.SSE.WriteTimeout,
+			MaxStreams: cfg.SSE.MaxStreams, MaxStreamsPerPrincipal: cfg.SSE.MaxStreamsPerPrincipal, RetryBase: cfg.SSE.RetryBase,
 		},
 	}
 }
@@ -61,10 +62,11 @@ func Module() fx.Option {
 			newGateways,
 			newTracer,
 			newMetrics,
-			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways, tracer trace.Tracer, metrics *httptransport.Metrics) (*httptransport.Server, error) {
+			newReadiness,
+			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways, tracer trace.Tracer, metrics *httptransport.Metrics, ready *readiness) (*httptransport.Server, error) {
 				opts := ServerOptions(cfg)
 				opts.Tracer, opts.Metrics = tracer, metrics
-				return httptransport.NewServer(opts, v, ctl, gw, func(context.Context) error { return nil })
+				return httptransport.NewServer(opts, v, ctl, gw, ready.check)
 			},
 		),
 		fx.Invoke(run),
@@ -109,7 +111,7 @@ func newGateways(lc fx.Lifecycle, cfg config.Config, ids *identities, log *slog.
 // run binds the listener inside OnStart, so Fx reports a failed bind as a
 // failed start, and turns a listener that stops on its own into a shutdown
 // with a non-zero exit instead of a process that keeps running unreachable.
-func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptransport.Server, ctl *control.Client, log *slog.Logger) {
+func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptransport.Server, ctl *control.Client, ready *readiness, log *slog.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			addr, err := srv.Start()
@@ -126,6 +128,9 @@ func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptranspor
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
+			// Readiness goes first (P1.4): the endpoint leaves the Service before
+			// the drain starts.
+			ready.stop()
 			shutdown, cancel := context.WithTimeout(ctx, cfg.HTTP.ShutdownTimeout)
 			defer cancel()
 			err := srv.Stop(shutdown)
