@@ -54,6 +54,12 @@ type Options struct {
 // slow-consumer buffers disconnect safely without canceling the business
 // operation"). They are transport limits, not business clocks.
 type StreamBounds struct {
+	// MaxStreams and MaxStreamsPerPrincipal bound the open event streams
+	// (P1.4); zero means unbounded. RetryBase is the advertised EventSource
+	// reconnect interval (jittered up to +50%); zero means 3s.
+	MaxStreams             int
+	MaxStreamsPerPrincipal int
+	RetryBase              time.Duration
 	// HeartbeatInterval keeps intermediaries from closing an idle stream;
 	// the comment frame carries no business meaning.
 	HeartbeatInterval time.Duration
@@ -127,7 +133,7 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// SSE is excluded from the generated strict server because it streams;
 	// its cursor parameters are bound with Gin's ShouldBind* against the
 	// same canonical-sequence rule and its frames come from gin-contrib/sse.
-	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream))
+	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream, newStreamLimiter(opts.Stream.MaxStreams, opts.Stream.MaxStreamsPerPrincipal)))
 
 	validator := ginmiddleware.OapiRequestValidatorWithOptions(spec, &ginmiddleware.Options{
 		Options: openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc},
@@ -361,6 +367,11 @@ func errorEnvelope() gin.HandlerFunc {
 		if !errors.As(c.Errors[0].Err, &ae) {
 			ae = &apiError{status: http.StatusServiceUnavailable, code: "DEPENDENCY_UNAVAILABLE", message: "dependency unavailable", retryable: true}
 		}
+		// A retryable refusal (capacity, an unavailable owner) names when to
+		// come back (P1.4): clients and EventSource reconnects pace themselves.
+		if ae.retryable && (ae.status == http.StatusTooManyRequests || ae.status == http.StatusServiceUnavailable) {
+			c.Header("Retry-After", retryAfterSeconds(ae))
+		}
 		c.JSON(ae.status, agentapi.ErrorEnvelope{Error: struct {
 			Code    agentapi.ErrorCode `json:"code"`
 			Details *struct {
@@ -404,4 +415,13 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// retryAfterSeconds is the Retry-After of a retryable refusal: longer for
+// capacity (the pool drains at its own pace) than for a dependency hiccup.
+func retryAfterSeconds(ae *apiError) string {
+	if ae.code == "CAPACITY_EXHAUSTED" {
+		return "5"
+	}
+	return "2"
 }
