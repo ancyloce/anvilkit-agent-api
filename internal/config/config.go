@@ -148,6 +148,13 @@ type SSE struct {
 	FrameBuffer       int           `koanf:"frame_buffer"`
 	SlowConsumerGrace time.Duration `koanf:"slow_consumer_grace"`
 	WriteTimeout      time.Duration `koanf:"write_timeout"`
+	// MaxStreams bounds the open event streams of the process and
+	// MaxStreamsPerPrincipal those of one principal (P1.4, API-03); the
+	// stream advertises RetryBase (jittered) as the EventSource reconnect
+	// interval.
+	MaxStreams             int           `koanf:"max_streams"`
+	MaxStreamsPerPrincipal int           `koanf:"max_streams_per_principal"`
+	RetryBase              time.Duration `koanf:"retry_base"`
 }
 
 // Artifacts bounds the API's side of API-12: the deadline it sets on a
@@ -191,34 +198,37 @@ type Config struct {
 // defaults are the reviewed baseline values; the file and the allowed
 // overrides refine them.
 var defaults = map[string]any{
-	"http.listen":               "127.0.0.1:9100",
-	"http.read_header_timeout":  "10s",
-	"http.body_limit_bytes":     256 << 10,
-	"http.shutdown_timeout":     "20s",
-	"sse.heartbeat_interval":    "15s",
-	"sse.frame_buffer":          64,
-	"sse.slow_consumer_grace":   "5s",
-	"sse.write_timeout":         "10s",
-	"artifacts.transfer_window": "15m",
-	"knowledge.timeout":         "30s",
-	"mcp.timeout":               "60s",
-	"preparations.profile":      "preparation-v1",
-	"telemetry.sample_ratio":    1.0,
-	"development.enabled":       false,
-	"identity.reload_interval":  "5s",
-	"control.identity.mode":     "mtls",
-	"knowledge.identity.mode":   "mtls",
-	"mcp.identity.mode":         "mtls",
-	"telemetry.otlp_tls.mode":   "tls",
-	"auth.mode":                 "oidc",
-	"auth.oidc.audience":        "anvilkit-agent-api",
-	"auth.oidc.algorithms":      []string{"RS256", "ES256"},
-	"auth.oidc.clock_skew":      "30s",
-	"auth.oidc.timeout":         "10s",
-	"auth.oidc.claims.tenant":   "tenant",
-	"auth.oidc.claims.project":  "project",
-	"auth.oidc.claims.actor":    "sub",
-	"auth.oidc.claims.roles":    "roles",
+	"http.listen":                   "127.0.0.1:9100",
+	"http.read_header_timeout":      "10s",
+	"http.body_limit_bytes":         256 << 10,
+	"http.shutdown_timeout":         "20s",
+	"sse.heartbeat_interval":        "15s",
+	"sse.frame_buffer":              64,
+	"sse.slow_consumer_grace":       "5s",
+	"sse.write_timeout":             "10s",
+	"sse.max_streams":               512,
+	"sse.max_streams_per_principal": 32,
+	"sse.retry_base":                "3s",
+	"artifacts.transfer_window":     "15m",
+	"knowledge.timeout":             "30s",
+	"mcp.timeout":                   "60s",
+	"preparations.profile":          "preparation-v1",
+	"telemetry.sample_ratio":        1.0,
+	"development.enabled":           false,
+	"identity.reload_interval":      "5s",
+	"control.identity.mode":         "mtls",
+	"knowledge.identity.mode":       "mtls",
+	"mcp.identity.mode":             "mtls",
+	"telemetry.otlp_tls.mode":       "tls",
+	"auth.mode":                     "oidc",
+	"auth.oidc.audience":            "anvilkit-agent-api",
+	"auth.oidc.algorithms":          []string{"RS256", "ES256"},
+	"auth.oidc.clock_skew":          "30s",
+	"auth.oidc.timeout":             "10s",
+	"auth.oidc.claims.tenant":       "tenant",
+	"auth.oidc.claims.project":      "project",
+	"auth.oidc.claims.actor":        "sub",
+	"auth.oidc.claims.roles":        "roles",
 }
 
 // envOverrides is the complete set of environment variables the service
@@ -354,6 +364,15 @@ func (c Config) validate() error {
 	// otherwise the handler could block past the bound it promises.
 	if c.SSE.WriteTimeout > c.SSE.SlowConsumerGrace+c.SSE.HeartbeatInterval {
 		errs = append(errs, fmt.Errorf("sse.write_timeout %s must not exceed slow_consumer_grace + heartbeat_interval", c.SSE.WriteTimeout))
+	}
+	if c.SSE.MaxStreams < 1 || c.SSE.MaxStreams > 65536 {
+		errs = append(errs, fmt.Errorf("sse.max_streams %d outside [1, 65536]", c.SSE.MaxStreams))
+	}
+	if c.SSE.MaxStreamsPerPrincipal < 1 || c.SSE.MaxStreamsPerPrincipal > c.SSE.MaxStreams {
+		errs = append(errs, fmt.Errorf("sse.max_streams_per_principal %d outside [1, sse.max_streams]", c.SSE.MaxStreamsPerPrincipal))
+	}
+	if c.SSE.RetryBase < time.Second || c.SSE.RetryBase > time.Minute {
+		errs = append(errs, fmt.Errorf("sse.retry_base %s outside [1s, 1m]", c.SSE.RetryBase))
 	}
 	if c.Preparations.Profile == "" {
 		errs = append(errs, errors.New("preparations.profile is required"))
