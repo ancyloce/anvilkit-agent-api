@@ -73,6 +73,12 @@ sse:
   frame_buffer: 64
   slow_consumer_grace: 5s
   write_timeout: 10s
+  # Open streams per process and per principal (P1.4); beyond them a stream
+  # is refused 429 CAPACITY_EXHAUSTED with Retry-After. retry_base is the
+  # reconnect interval the stream advertises (jittered).
+  max_streams: 512
+  max_streams_per_principal: 32
+  retry_base: 3s
 # artifacts: the deadline the API sets on an artifact transfer it begins
 # (API-12); Control bounds it further by the operation and attempt.
 artifacts:
