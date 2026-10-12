@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
@@ -43,6 +44,10 @@ func ServerOptions(cfg config.Config) httptransport.Options {
 
 func Module() fx.Option {
 	return fx.Options(
+		// The process's stop bound lies above the longest HTTP drain the
+		// configuration allows (P1.7): Fx's default of 15s would end a
+		// longer drain as a failed stop with a non-zero exit.
+		fx.StopTimeout(config.MaxShutdownTimeout+30*time.Second),
 		fx.WithLogger(func(log *slog.Logger) fxevent.Logger { return &fxevent.SlogLogger{Logger: log} }),
 		fx.Provide(
 			config.Load,
