@@ -334,7 +334,7 @@ func (c Config) validate() error {
 	if c.HTTP.BodyLimitBytes < 1<<10 || c.HTTP.BodyLimitBytes > 16<<20 {
 		errs = append(errs, fmt.Errorf("http.body_limit_bytes %d outside [1KiB, 16MiB]", c.HTTP.BodyLimitBytes))
 	}
-	if c.HTTP.ShutdownTimeout < time.Second || c.HTTP.ShutdownTimeout > 5*time.Minute {
+	if c.HTTP.ShutdownTimeout < time.Second || c.HTTP.ShutdownTimeout > MaxShutdownTimeout {
 		errs = append(errs, fmt.Errorf("http.shutdown_timeout %s outside [1s, 5m]", c.HTTP.ShutdownTimeout))
 	}
 	switch c.Auth.Mode {
@@ -490,3 +490,7 @@ func (o OIDC) validate(development bool) []error {
 	}
 	return errs
 }
+
+// MaxShutdownTimeout is the longest drain http.shutdown_timeout may set; the
+// process's own stop bound lies above it (P1.7).
+const MaxShutdownTimeout = 5 * time.Minute
