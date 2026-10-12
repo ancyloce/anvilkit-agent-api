@@ -77,7 +77,7 @@ const (
 // sse.Encode (v1.1.1) discards the writer's errors for id/event/[]byte
 // data, so frames are encoded into a buffer and the connection write is
 // performed and checked here, under the write deadline.
-func streamEvents(control application.Control, bounds StreamBounds, limiter *streamLimiter) gin.HandlerFunc {
+func streamEvents(control application.Control, bounds StreamBounds, limiter *streamLimiter, draining <-chan struct{}) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		after, err := bindCursor(c)
 		if err != nil {
@@ -185,11 +185,32 @@ func streamEvents(control application.Control, bounds StreamBounds, limiter *str
 					}
 				}
 				return
+			case <-draining:
+				// The server shuts down (P1.7): the stream ends with an end
+				// frame naming the reason, and the client reconnects (to
+				// another replica) after the advertised retry interval from
+				// its last event id.
+				if b, err := encodeEnd(operationID, "server_shutdown"); err == nil {
+					write(b)
+				}
+				return
 			case <-ctx.Done():
 				return // the client went away
 			}
 		}
 	}
+}
+
+// eventEnd is the final event of a stream the server ends on its own
+// (P1.7): its data names the operation and the reason.
+const eventEnd = "end"
+
+func encodeEnd(operationID, reason string) ([]byte, error) {
+	payload, err := json.Marshal(map[string]string{"operationId": operationID, "reason": reason})
+	if err != nil {
+		return nil, err
+	}
+	return encode(sse.Event{Event: eventEnd, Data: payload})
 }
 
 // encodeFrame renders one OperationEventFrame as an SSE event whose id is

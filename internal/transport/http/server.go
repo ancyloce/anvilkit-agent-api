@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -100,9 +101,16 @@ type Server struct {
 	engine *gin.Engine
 	http   *http.Server
 	served chan error
+	// draining is closed when the shutdown starts (P1.7): every open event
+	// stream writes its final end frame and returns, so the HTTP drain is
+	// not held until its bound by connections that never go idle. Other
+	// requests are not canceled; they drain as before.
+	draining  chan struct{}
+	drainOnce sync.Once
 }
 
 func NewServer(opts Options, verifier application.Verifier, control application.Control, gateways Gateways, ready func(context.Context) error) (*Server, error) {
+	draining := make(chan struct{})
 	spec, err := agentapi.GetSwagger()
 	if err != nil {
 		return nil, err
@@ -133,7 +141,7 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// SSE is excluded from the generated strict server because it streams;
 	// its cursor parameters are bound with Gin's ShouldBind* against the
 	// same canonical-sequence rule and its frames come from gin-contrib/sse.
-	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream, newStreamLimiter(opts.Stream.MaxStreams, opts.Stream.MaxStreamsPerPrincipal)))
+	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream, newStreamLimiter(opts.Stream.MaxStreams, opts.Stream.MaxStreamsPerPrincipal), draining))
 
 	validator := ginmiddleware.OapiRequestValidatorWithOptions(spec, &ginmiddleware.Options{
 		Options: openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc},
@@ -158,7 +166,7 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 		Middlewares: []agentapi.MiddlewareFunc{agentapi.MiddlewareFunc(strictBody(opts.BodyLimitBytes)), agentapi.MiddlewareFunc(validator)},
 	})
 
-	return &Server{engine: engine, http: &http.Server{Addr: opts.Listen, Handler: engine, ReadHeaderTimeout: opts.ReadHeaderTimeout}}, nil
+	return &Server{engine: engine, http: &http.Server{Addr: opts.Listen, Handler: engine, ReadHeaderTimeout: opts.ReadHeaderTimeout}, draining: draining}, nil
 }
 
 // Handler exposes the engine for in-process tests.
@@ -190,7 +198,12 @@ func (s *Server) Start() (net.Addr, error) {
 // reports instead of discarding.
 func (s *Server) Served() <-chan error { return s.served }
 
-func (s *Server) Stop(ctx context.Context) error { return s.http.Shutdown(ctx) }
+// Stop ends every open event stream with its end frame, then drains the
+// listener within ctx (P1.7).
+func (s *Server) Stop(ctx context.Context) error {
+	s.drainOnce.Do(func() { close(s.draining) })
+	return s.http.Shutdown(ctx)
+}
 
 // ---- middleware ----
 
