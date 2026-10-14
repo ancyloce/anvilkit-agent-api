@@ -19,6 +19,11 @@ type Knowledge interface {
 	DeleteSource(ctx context.Context, cmd CommandIdentity, p Principal, sourceID, expectedRevision string) (agentapi.Source, error)
 	ReplaceSourceAccess(ctx context.Context, cmd CommandIdentity, p Principal, sourceID string, req agentapi.ReplaceSourceAccessRequest) (agentapi.Source, error)
 	Search(ctx context.Context, p Principal, req agentapi.SearchRequest) (agentapi.SearchResponse, error)
+	// P2.6: the document upload capability, snapshots and recall.
+	BeginSourceUpload(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.BeginSourceUploadRequest) (agentapi.SourceUpload, error)
+	CreateSnapshot(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.CreateSnapshotRequest) (agentapi.Snapshot, error)
+	GetSnapshot(ctx context.Context, p Principal, snapshotID string) (agentapi.Snapshot, error)
+	RecallMemories(ctx context.Context, p Principal, req agentapi.RecallMemoriesRequest) (agentapi.RecallMemoriesResponse, error)
 	ListMemories(ctx context.Context, p Principal, params agentapi.ListMemoriesParams) (agentapi.MemoryPage, error)
 	ProposeMemory(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.ProposeMemoryRequest) (agentapi.MemoryFact, error)
 	DecideMemory(ctx context.Context, cmd CommandIdentity, p Principal, factID string, req agentapi.MemoryDecisionRequest) (agentapi.MemoryFact, error)
@@ -35,6 +40,9 @@ type MCP interface {
 	RevokeGrant(ctx context.Context, cmd CommandIdentity, p Principal, grantID string, req agentapi.RevokeGrantRequest) (agentapi.Grant, error)
 	CreateToolCall(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.CreateToolCallRequest) (agentapi.ToolCall, error)
 	GetToolCall(ctx context.Context, p Principal, callID string) (agentapi.ToolCall, error)
+	// ReconcileToolCall is the operator reconciliation of one call (P1.2,
+	// P2.5): MCP decides the call-operator role; it never sends.
+	ReconcileToolCall(ctx context.Context, p Principal, callID string) (agentapi.ToolCall, error)
 }
 
 // PreviewView is the committed preview of a preview_build operation.
@@ -120,6 +128,21 @@ func (u Unavailable) RevokeGrant(context.Context, CommandIdentity, Principal, st
 func (u Unavailable) CreateToolCall(context.Context, CommandIdentity, Principal, agentapi.CreateToolCallRequest) (agentapi.ToolCall, error) {
 	return agentapi.ToolCall{}, u.err()
 }
+func (u Unavailable) BeginSourceUpload(context.Context, CommandIdentity, Principal, agentapi.BeginSourceUploadRequest) (agentapi.SourceUpload, error) {
+	return agentapi.SourceUpload{}, u.err()
+}
+func (u Unavailable) CreateSnapshot(context.Context, CommandIdentity, Principal, agentapi.CreateSnapshotRequest) (agentapi.Snapshot, error) {
+	return agentapi.Snapshot{}, u.err()
+}
+func (u Unavailable) GetSnapshot(context.Context, Principal, string) (agentapi.Snapshot, error) {
+	return agentapi.Snapshot{}, u.err()
+}
+func (u Unavailable) RecallMemories(context.Context, Principal, agentapi.RecallMemoriesRequest) (agentapi.RecallMemoriesResponse, error) {
+	return agentapi.RecallMemoriesResponse{}, u.err()
+}
 func (u Unavailable) GetToolCall(context.Context, Principal, string) (agentapi.ToolCall, error) {
+	return agentapi.ToolCall{}, u.err()
+}
+func (u Unavailable) ReconcileToolCall(context.Context, Principal, string) (agentapi.ToolCall, error) {
 	return agentapi.ToolCall{}, u.err()
 }
