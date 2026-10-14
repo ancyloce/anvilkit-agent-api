@@ -25,6 +25,33 @@ type fakeKnowledge struct {
 	scopes []application.Principal
 }
 
+// P2.6: the upload capability, snapshots and recall answer as Knowledge does.
+func (f *fakeKnowledge) BeginSourceUpload(_ context.Context, cmd application.CommandIdentity, p application.Principal, req agentapi.BeginSourceUploadRequest) (agentapi.SourceUpload, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scopes = append(f.scopes, p)
+	return agentapi.SourceUpload{UploadId: "upl-0123456789abcdef0123456789abcdef", UploadUrl: "https://objects.example.invalid/u?X-Amz-Signature=00", UploadMethod: "PUT",
+		UploadHeaders: map[string]string{"content-length": req.SizeBytes, "content-type": req.MediaType}, ExpiresAt: time.Date(2026, 10, 13, 12, 15, 0, 0, time.UTC)}, nil
+}
+
+func (f *fakeKnowledge) CreateSnapshot(_ context.Context, cmd application.CommandIdentity, p application.Principal, req agentapi.CreateSnapshotRequest) (agentapi.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scopes = append(f.scopes, p)
+	refs := []agentapi.SourceRef{}
+	for _, id := range req.SourceIds {
+		refs = append(refs, id+"@1")
+	}
+	return agentapi.Snapshot{SnapshotId: "snap_1", TenantId: p.TenantID, IndexGeneration: "1", SourceRevisions: refs, ContentDigest: digest, CreatedAt: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}, nil
+}
+
+func (f *fakeKnowledge) RecallMemories(_ context.Context, p application.Principal, req agentapi.RecallMemoriesRequest) (agentapi.RecallMemoriesResponse, error) {
+	if req.Query == "denied" {
+		return agentapi.RecallMemoriesResponse{}, &application.ControlError{Code: "FORBIDDEN", Message: "FORBIDDEN: commercial authorization denied"}
+	}
+	return agentapi.RecallMemoriesResponse{Facts: []agentapi.MemoryFact{}, NoAnswer: true, IndexGeneration: "1"}, nil
+}
+
 func (f *fakeKnowledge) ListSources(_ context.Context, p application.Principal, cursor string, limit int) (agentapi.SourcePage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -36,9 +63,23 @@ func (f *fakeKnowledge) ListSources(_ context.Context, p application.Principal, 
 
 type fakeMCP struct {
 	application.Unavailable
-	mu    sync.Mutex
-	cmds  []application.CommandIdentity
-	calls []agentapi.CreateToolCallRequest
+	mu         sync.Mutex
+	cmds       []application.CommandIdentity
+	calls      []agentapi.CreateToolCallRequest
+	reconciled []string
+}
+
+// ReconcileToolCall answers as MCP does: the call-operator role decides.
+func (f *fakeMCP) ReconcileToolCall(_ context.Context, p application.Principal, callID string) (agentapi.ToolCall, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reconciled = append(f.reconciled, p.TenantID+"/"+p.ActorID+"/"+callID)
+	if callID == "call_forbidden" {
+		return agentapi.ToolCall{}, &application.ControlError{Code: "FORBIDDEN", Message: "FORBIDDEN: no call operator"}
+	}
+	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	return agentapi.ToolCall{CallId: callID, TenantId: p.TenantID, GrantId: "g1", GrantRevision: "1", ServerId: "srv_1", Method: "create_issue",
+		ArgumentDigest: digest, State: "failed", CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func (f *fakeMCP) CreateGrant(_ context.Context, cmd application.CommandIdentity, p application.Principal, req agentapi.CreateGrantRequest) (agentapi.Grant, error) {
@@ -96,6 +137,32 @@ func TestGateways(t *testing.T) {
 		require.NotEmpty(t, m.cmds[0].RequestDigest, "the command binds the body digest")
 	})
 
+	t.Run("P2.6: upload capability, snapshot and recall routes carry the principal; refusals keep their code", func(t *testing.T) {
+		k := &fakeKnowledge{}
+		ts := gatewayServer(t, newFake(), httptransport.Gateways{Knowledge: k})
+		status, body, _ := do(t, ts, http.MethodPost, "/api/v1/knowledge/sources/uploads", tokenA, `{"commandId":"up_1","contentDigest":"`+digest+`","sizeBytes":"12","mediaType":"text/markdown"}`)
+		require.Equal(t, http.StatusCreated, status)
+		require.Equal(t, "PUT", body["uploadMethod"])
+		require.Equal(t, map[string]any{"content-length": "12", "content-type": "text/markdown"}, body["uploadHeaders"])
+		status, body, _ = do(t, ts, http.MethodPost, "/api/v1/knowledge/snapshots", tokenA, `{"commandId":"snap_1","sourceIds":["src_1"]}`)
+		require.Equal(t, http.StatusCreated, status)
+		require.Equal(t, []any{"src_1@1"}, body["sourceRevisions"])
+		status, _, _ = do(t, ts, http.MethodPost, "/api/v1/knowledge/snapshots", tokenA, `{"commandId":"snap_2","sourceIds":[]}`)
+		require.Equal(t, http.StatusBadRequest, status, "a snapshot of nothing")
+		status, body, _ = do(t, ts, http.MethodPost, "/api/v1/memories/recalls", tokenA, `{"query":"brand","retrievalProfileId":"hybrid-bge-m3-dev-v1"}`)
+		require.Equal(t, http.StatusOK, status)
+		require.Equal(t, true, body["noAnswer"])
+		status, body, _ = do(t, ts, http.MethodPost, "/api/v1/memories/recalls", tokenA, `{"query":"denied","retrievalProfileId":"hybrid-bge-m3-dev-v1"}`)
+		require.Equal(t, http.StatusForbidden, status)
+		require.Equal(t, "FORBIDDEN", body["error"].(map[string]any)["code"])
+		status, _, _ = do(t, ts, http.MethodPost, "/api/v1/memories", tokenA, `{"commandId":"m1","subjectType":"project","subjectId":"proj_a","content":"teal","sourceRefs":["src_1"]}`)
+		require.Equal(t, http.StatusBadRequest, status, "CON-02: a bare source id is not provenance")
+		status, _, _ = do(t, ts, http.MethodPost, "/api/v1/knowledge/sources", tokenA, `{"commandId":"s1","kind":"url","locator":"https://example.org/","contentDigest":"`+digest+`","mediaType":"text/html","sizeBytes":"1"}`)
+		require.Equal(t, http.StatusBadRequest, status, "an unimplemented kind is not public")
+		require.Len(t, k.scopes, 2)
+		require.Equal(t, application.Principal{TenantID: "tenant_a", ActorID: "user_a"}, k.scopes[0])
+	})
+
 	t.Run("a tool call is validated against the contract before it reaches MCP", func(t *testing.T) {
 		m := &fakeMCP{}
 		ts := gatewayServer(t, newFake(), httptransport.Gateways{MCP: m})
@@ -107,6 +174,18 @@ func TestGateways(t *testing.T) {
 		require.Equal(t, "succeeded", body["state"])
 		require.Len(t, m.calls, 1)
 		require.Equal(t, map[string]any{"query": "open"}, m.calls[0].Arguments)
+	})
+
+	t.Run("P2.5: the operator reconciliation passes the principal to MCP, which decides the role", func(t *testing.T) {
+		m := &fakeMCP{}
+		ts := gatewayServer(t, newFake(), httptransport.Gateways{MCP: m})
+		status, body, _ := do(t, ts, http.MethodPost, "/api/v1/mcp/calls/call_7/reconciliations", tokenA, "")
+		require.Equal(t, http.StatusOK, status)
+		require.Equal(t, "failed", body["state"])
+		status, body, _ = do(t, ts, http.MethodPost, "/api/v1/mcp/calls/call_forbidden/reconciliations", tokenA, "")
+		require.Equal(t, http.StatusForbidden, status)
+		require.Equal(t, "FORBIDDEN", body["error"].(map[string]any)["code"])
+		require.Equal(t, []string{"tenant_a/user_a/call_7", "tenant_a/user_a/call_forbidden"}, m.reconciled)
 	})
 
 	t.Run("preview artifacts are served as exact, non-sniffable, uncached bytes of the tenant's preview", func(t *testing.T) {

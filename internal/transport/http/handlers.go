@@ -335,6 +335,42 @@ func (h *strictHandlers) Search(ctx context.Context, req agentapi.SearchRequestO
 	return agentapi.Search200JSONResponse(res), nil
 }
 
+// P2.6: the document upload capability, snapshots and recall.
+
+func (h *strictHandlers) BeginSourceUpload(ctx context.Context, req agentapi.BeginSourceUploadRequestObject) (agentapi.BeginSourceUploadResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	up, err := h.knowledge.BeginSourceUpload(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.BeginSourceUpload201JSONResponse(up), nil
+}
+
+func (h *strictHandlers) CreateSnapshot(ctx context.Context, req agentapi.CreateSnapshotRequestObject) (agentapi.CreateSnapshotResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	snap, err := h.knowledge.CreateSnapshot(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.CreateSnapshot201JSONResponse(snap), nil
+}
+
+func (h *strictHandlers) GetSnapshot(ctx context.Context, req agentapi.GetSnapshotRequestObject) (agentapi.GetSnapshotResponseObject, error) {
+	snap, err := h.knowledge.GetSnapshot(ctx, principal(ginContext(ctx)), req.SnapshotId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetSnapshot200JSONResponse(snap), nil
+}
+
+func (h *strictHandlers) RecallMemories(ctx context.Context, req agentapi.RecallMemoriesRequestObject) (agentapi.RecallMemoriesResponseObject, error) {
+	res, err := h.knowledge.RecallMemories(ctx, principal(ginContext(ctx)), *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.RecallMemories200JSONResponse(res), nil
+}
+
 func (h *strictHandlers) ListMemories(ctx context.Context, req agentapi.ListMemoriesRequestObject) (agentapi.ListMemoriesResponseObject, error) {
 	page, err := h.knowledge.ListMemories(ctx, principal(ginContext(ctx)), req.Params)
 	if err != nil {
@@ -446,4 +482,12 @@ func (h *strictHandlers) GetToolCall(ctx context.Context, req agentapi.GetToolCa
 		return nil, err
 	}
 	return agentapi.GetToolCall200JSONResponse(c), nil
+}
+
+func (h *strictHandlers) ReconcileToolCall(ctx context.Context, req agentapi.ReconcileToolCallRequestObject) (agentapi.ReconcileToolCallResponseObject, error) {
+	c, err := h.mcp.ReconcileToolCall(ctx, principal(ginContext(ctx)), req.CallId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ReconcileToolCall200JSONResponse(c), nil
 }
