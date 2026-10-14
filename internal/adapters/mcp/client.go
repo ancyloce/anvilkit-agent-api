@@ -325,3 +325,15 @@ func (c *Client) GetToolCall(ctx context.Context, p application.Principal, callI
 	}
 	return toCall(resp.GetCall()), nil
 }
+
+// ReconcileToolCall asks MCP's operator reconciliation of one call (P2.5);
+// MCP checks the call-operator role and never sends.
+func (c *Client) ReconcileToolCall(ctx context.Context, p application.Principal, callID string) (agentapi.ToolCall, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+	resp, err := c.calls.ReconcileCall(ctx, &mcpv1.ReconcileCallRequest{Scope: scope(p), CallId: callID})
+	if err != nil {
+		return agentapi.ToolCall{}, control.MapError(err, "mcp")
+	}
+	return toCall(resp.GetCall()), nil
+}

@@ -24,6 +24,7 @@ import (
 type Client struct {
 	conn      *grpc.ClientConn
 	sources   knowledgev1.SourceServiceClient
+	snapshots knowledgev1.SnapshotServiceClient
 	retrieval knowledgev1.RetrievalServiceClient
 	memory    knowledgev1.MemoryServiceClient
 	timeout   time.Duration
@@ -36,8 +37,8 @@ func Dial(address string, timeout time.Duration, transport grpc.DialOption) (*Cl
 	if err != nil {
 		return nil, err
 	}
-	return &Client{conn: conn, sources: knowledgev1.NewSourceServiceClient(conn), retrieval: knowledgev1.NewRetrievalServiceClient(conn),
-		memory: knowledgev1.NewMemoryServiceClient(conn), timeout: timeout}, nil
+	return &Client{conn: conn, sources: knowledgev1.NewSourceServiceClient(conn), snapshots: knowledgev1.NewSnapshotServiceClient(conn),
+		retrieval: knowledgev1.NewRetrievalServiceClient(conn), memory: knowledgev1.NewMemoryServiceClient(conn), timeout: timeout}, nil
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
@@ -67,7 +68,12 @@ func ts(t *timestamppb.Timestamp) *time.Time {
 func toSource(s *knowledgev1.Source) agentapi.Source {
 	access := make([]agentapi.AccessEntry, 0, len(s.GetAccess()))
 	for _, a := range s.GetAccess() {
-		access = append(access, agentapi.AccessEntry{PrincipalType: agentapi.AccessEntryPrincipalType(a.GetPrincipalType()), PrincipalId: a.GetPrincipalId()})
+		e := agentapi.AccessEntry{PrincipalType: agentapi.AccessEntryPrincipalType(a.GetPrincipalType()), PrincipalId: a.GetPrincipalId()}
+		if a.GetPermission() == "manage" {
+			p := agentapi.Manage
+			e.Permission = &p
+		}
+		access = append(access, e)
 	}
 	out := agentapi.Source{
 		SourceId: s.GetSourceId(), TenantId: s.GetTenantId(), Kind: agentapi.SourceKind(word(s.GetKind().String(), "SOURCE_KIND_")), Locator: s.GetLocator(),
@@ -101,7 +107,11 @@ func toFact(f *knowledgev1.MemoryFact) agentapi.MemoryFact {
 func accessOf(in []agentapi.AccessEntry) []*knowledgev1.AccessEntry {
 	out := make([]*knowledgev1.AccessEntry, 0, len(in))
 	for _, a := range in {
-		out = append(out, &knowledgev1.AccessEntry{PrincipalType: string(a.PrincipalType), PrincipalId: a.PrincipalId})
+		e := &knowledgev1.AccessEntry{PrincipalType: string(a.PrincipalType), PrincipalId: a.PrincipalId}
+		if a.Permission != nil {
+			e.Permission = string(*a.Permission)
+		}
+		out = append(out, e)
 	}
 	return out
 }
@@ -261,4 +271,74 @@ func (c *Client) DecideMemory(ctx context.Context, cmd application.CommandIdenti
 		return agentapi.MemoryFact{}, control.MapError(err, "knowledge")
 	}
 	return toFact(resp.GetFact()), nil
+}
+
+// BeginSourceUpload asks Knowledge for a single-use upload capability of one
+// document (P2.6). The capability is returned to the authenticated caller
+// only; whoever performs the PUT sends exactly its signed headers.
+func (c *Client) BeginSourceUpload(ctx context.Context, cmd application.CommandIdentity, p application.Principal, req agentapi.BeginSourceUploadRequest) (agentapi.SourceUpload, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+	resp, err := c.sources.BeginUpload(ctx, &knowledgev1.BeginUploadRequest{Command: command(cmd), Scope: scope(p), ContentDigest: req.ContentDigest,
+		SizeBytes: req.SizeBytes, MediaType: req.MediaType})
+	if err != nil {
+		return agentapi.SourceUpload{}, control.MapError(err, "knowledge")
+	}
+	headers := map[string]string{}
+	for k, v := range resp.GetUploadHeaders() {
+		headers[k] = v
+	}
+	return agentapi.SourceUpload{UploadId: resp.GetUploadId(), UploadUrl: resp.GetUploadUrl(), UploadMethod: agentapi.SourceUploadUploadMethod(resp.GetUploadMethod()),
+		UploadHeaders: headers, ExpiresAt: resp.GetExpiresAt().AsTime().UTC()}, nil
+}
+
+func toSnapshot(s *knowledgev1.Snapshot) agentapi.Snapshot {
+	out := agentapi.Snapshot{SnapshotId: s.GetSnapshotId(), TenantId: s.GetTenantId(), IndexGeneration: s.GetIndexGeneration(),
+		SourceRevisions: append([]agentapi.SourceRef{}, s.GetSourceRevisions()...), ContentDigest: s.GetContentDigest(), CreatedAt: s.GetCreatedAt().AsTime().UTC()}
+	if s.GetProjectId() != "" {
+		v := s.GetProjectId()
+		out.ProjectId = &v
+	}
+	return out
+}
+
+func (c *Client) CreateSnapshot(ctx context.Context, cmd application.CommandIdentity, p application.Principal, req agentapi.CreateSnapshotRequest) (agentapi.Snapshot, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+	resp, err := c.snapshots.CreateSnapshot(ctx, &knowledgev1.CreateSnapshotRequest{Command: command(cmd), Scope: scope(p), SourceIds: req.SourceIds})
+	if err != nil {
+		return agentapi.Snapshot{}, control.MapError(err, "knowledge")
+	}
+	return toSnapshot(resp.GetSnapshot()), nil
+}
+
+func (c *Client) GetSnapshot(ctx context.Context, p application.Principal, snapshotID string) (agentapi.Snapshot, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+	resp, err := c.snapshots.GetSnapshot(ctx, &knowledgev1.GetSnapshotRequest{Scope: scope(p), SnapshotId: snapshotID})
+	if err != nil {
+		return agentapi.Snapshot{}, control.MapError(err, "knowledge")
+	}
+	return toSnapshot(resp.GetSnapshot()), nil
+}
+
+// RecallMemories recalls the principal's facts (P2.6); Knowledge asks
+// Control's commercial authorization of the disclosure first.
+func (c *Client) RecallMemories(ctx context.Context, p application.Principal, req agentapi.RecallMemoriesRequest) (agentapi.RecallMemoriesResponse, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+	in := &knowledgev1.RecallFactsRequest{Scope: scope(p), Query: req.Query, RetrievalProfileId: req.RetrievalProfileId, MaxFacts: 5,
+		Deadline: timestamppb.New(time.Now().Add(c.timeout))}
+	if req.MaxFacts != nil {
+		in.MaxFacts = uint32(*req.MaxFacts)
+	}
+	resp, err := c.memory.RecallFacts(ctx, in)
+	if err != nil {
+		return agentapi.RecallMemoriesResponse{}, control.MapError(err, "knowledge")
+	}
+	out := agentapi.RecallMemoriesResponse{Facts: []agentapi.MemoryFact{}, NoAnswer: resp.GetNoAnswer(), IndexGeneration: resp.GetIndexGeneration()}
+	for _, f := range resp.GetFacts() {
+		out.Facts = append(out.Facts, toFact(f))
+	}
+	return out, nil
 }
