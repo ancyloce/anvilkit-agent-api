@@ -8,6 +8,7 @@ package knowledge
 
 import (
 	"context"
+	"github.com/ancyloce/anvilkit-agent-api/internal/requestid"
 	"strings"
 	"time"
 
@@ -33,7 +34,9 @@ type Client struct {
 // Dial connects with the given transport credential (the rotating workload
 // mTLS identity, or plaintext under the loader's development guard).
 func Dial(address string, timeout time.Duration, transport grpc.DialOption) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()), transport)
+	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		// P3.6: the request identifier travels to the owner with every call.
+		grpc.WithChainUnaryInterceptor(requestid.UnaryClient()), grpc.WithChainStreamInterceptor(requestid.StreamClient()), transport)
 	if err != nil {
 		return nil, err
 	}
