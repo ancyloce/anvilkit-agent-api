@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -20,15 +21,18 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-gonic/gin"
 	ginmiddleware "github.com/oapi-codegen/gin-middleware"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
+	"github.com/ancyloce/anvilkit-agent-api/internal/requestid"
 	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 )
 
 const (
 	ctxPrincipal = "anvilkit.principal"
 	ctxRequestID = "anvilkit.requestId"
+	ctxErrorCode = "anvilkit.errorCode"
 	ctxDigest    = "anvilkit.requestDigest"
 )
 
@@ -49,6 +53,9 @@ type Options struct {
 	// Tracer and Metrics observe every request (observe.go); nil disables them.
 	Tracer  trace.Tracer
 	Metrics *Metrics
+	// Logger receives one line per request, error and recovered panic with
+	// its requestId (P3.6, API-09); nil discards them.
+	Logger *slog.Logger
 }
 
 // StreamBounds limits the SSE transport (contracts.md §6 "bounded
@@ -124,7 +131,15 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// which is registered first so it runs last; a panic becomes the same
 	// envelope through Gin's recovery.
 	// observe is outermost: it records the status the envelope finally wrote.
-	engine.Use(observe(opts.Tracer, opts.Metrics), requestID(), errorEnvelope(), gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
+	// requestID names the request on its span and in its context (sent to
+	// the owners); logRequests writes its line after the envelope rendered.
+	log := opts.Logger
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	engine.Use(observe(opts.Tracer, opts.Metrics), requestID(), logRequests(log), errorEnvelope(), gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, recovered any) {
+		// The panic value can hold request data: only its type is logged.
+		log.Error("panic recovered", "requestId", requestIDOf(c), "panic", fmt.Sprintf("%T", recovered), "route", c.FullPath())
 		fail(c, &apiError{status: http.StatusServiceUnavailable, code: "DEPENDENCY_UNAVAILABLE", message: "internal failure", retryable: true})
 	}))
 
@@ -212,7 +227,40 @@ func requestID() gin.HandlerFunc {
 		id := newRequestID()
 		c.Set(ctxRequestID, id)
 		c.Header("X-Request-Id", id)
+		// P3.6 (API-09): the same identifier on the server span and, through
+		// the request context, in the metadata of every owner call.
+		ctx := c.Request.Context()
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String(requestid.SpanAttribute, id))
+		c.Request = c.Request.WithContext(requestid.With(ctx, id))
 		c.Next()
+	}
+}
+
+// logRequests writes one line per request with its requestId, the route
+// template, the status, the duration and, for an error, the envelope's code
+// (P3.6, API-09): never a path value, query, header, body or token. 5xx are
+// errors, 4xx warnings.
+func logRequests(log *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		status := c.Writer.Status()
+		route := c.FullPath()
+		if route == "" {
+			route = "unmatched"
+		}
+		attrs := []any{"requestId", requestIDOf(c), "method", c.Request.Method, "route", route, "status", status, "durationMs", time.Since(start).Milliseconds()}
+		if code, ok := c.Get(ctxErrorCode); ok {
+			attrs = append(attrs, "errorCode", code)
+		}
+		switch {
+		case status >= http.StatusInternalServerError:
+			log.Error("request failed", attrs...)
+		case status >= http.StatusBadRequest:
+			log.Warn("request refused", attrs...)
+		default:
+			log.Info("request", attrs...)
+		}
 	}
 }
 
@@ -382,6 +430,7 @@ func errorEnvelope() gin.HandlerFunc {
 		}
 		// A retryable refusal (capacity, an unavailable owner) names when to
 		// come back (P1.4): clients and EventSource reconnects pace themselves.
+		c.Set(ctxErrorCode, ae.code)
 		if ae.retryable && (ae.status == http.StatusTooManyRequests || ae.status == http.StatusServiceUnavailable) {
 			c.Header("Retry-After", retryAfterSeconds(ae))
 		}
