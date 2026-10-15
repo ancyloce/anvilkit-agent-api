@@ -68,9 +68,9 @@ func Module() fx.Option {
 			newTracer,
 			newMetrics,
 			newReadiness,
-			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways, tracer trace.Tracer, metrics *httptransport.Metrics, ready *readiness) (*httptransport.Server, error) {
+			func(cfg config.Config, v application.Verifier, ctl application.Control, gw httptransport.Gateways, tracer trace.Tracer, metrics *httptransport.Metrics, ready *readiness, log *slog.Logger) (*httptransport.Server, error) {
 				opts := ServerOptions(cfg)
-				opts.Tracer, opts.Metrics = tracer, metrics
+				opts.Tracer, opts.Metrics, opts.Logger = tracer, metrics, log
 				return httptransport.NewServer(opts, v, ctl, gw, ready.check)
 			},
 		),
