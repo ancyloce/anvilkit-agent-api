@@ -491,3 +491,47 @@ func (h *strictHandlers) ReconcileToolCall(ctx context.Context, req agentapi.Rec
 	}
 	return agentapi.ReconcileToolCall200JSONResponse(c), nil
 }
+
+// BeginRecovery, GetRecovery, ListRecoveryFindings and DisposeObligation
+// are API-17 (F-P3.7-1): the operator's recovery routes. Control decides
+// the operator role and the run's disclosure; a command Control had
+// already applied answers 200 with the original record, a new one 201.
+func (h *strictHandlers) BeginRecovery(ctx context.Context, req agentapi.BeginRecoveryRequestObject) (agentapi.BeginRecoveryResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	run, existing, err := h.control.BeginRecovery(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if existing {
+		return agentapi.BeginRecovery200JSONResponse(run), nil
+	}
+	return agentapi.BeginRecovery201JSONResponse(run), nil
+}
+
+func (h *strictHandlers) GetRecovery(ctx context.Context, req agentapi.GetRecoveryRequestObject) (agentapi.GetRecoveryResponseObject, error) {
+	run, err := h.control.GetRecovery(ctx, principal(ginContext(ctx)), req.RunId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetRecovery200JSONResponse(run), nil
+}
+
+func (h *strictHandlers) ListRecoveryFindings(ctx context.Context, req agentapi.ListRecoveryFindingsRequestObject) (agentapi.ListRecoveryFindingsResponseObject, error) {
+	page, err := h.control.ListRecoveryFindings(ctx, principal(ginContext(ctx)), req.RunId, req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListRecoveryFindings200JSONResponse(page), nil
+}
+
+func (h *strictHandlers) DisposeObligation(ctx context.Context, req agentapi.DisposeObligationRequestObject) (agentapi.DisposeObligationResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	d, existing, err := h.control.DisposeObligation(ctx, cmd, p, req.RunId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if existing {
+		return agentapi.DisposeObligation200JSONResponse(d), nil
+	}
+	return agentapi.DisposeObligation201JSONResponse(d), nil
+}

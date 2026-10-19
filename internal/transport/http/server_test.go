@@ -70,6 +70,7 @@ type fakeControl struct {
 	releases  map[string]application.ReleaseView
 	subjects  []application.OperationSubject
 	artifacts map[string]application.PreviewBytes
+	rec       *fakeRecovery
 }
 
 func newFake() *fakeControl {
