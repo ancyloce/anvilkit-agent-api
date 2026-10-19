@@ -187,15 +187,26 @@ func (c *Client) ReplaceSourceAccess(ctx context.Context, cmd application.Comman
 	return toSource(resp.GetSource()), nil
 }
 
-func (c *Client) Search(ctx context.Context, p application.Principal, req agentapi.SearchRequest) (agentapi.SearchResponse, error) {
-	ctx, cancel := c.ctx(ctx)
-	defer cancel()
+// defaultMaxContextItems is the cap of a search that names none: the
+// contract's maximum, so the retrieval profile's character budget bounds the
+// context. maxContextItems is optional in the public contract but Knowledge
+// requires 1..64, so an absent cap is never sent as 0 (provisional value,
+// open decision D-4 in delivery.md).
+const defaultMaxContextItems = 64
+
+func searchRequest(p application.Principal, req agentapi.SearchRequest, deadline time.Time) *knowledgev1.SearchRequest {
 	in := &knowledgev1.SearchRequest{Scope: scope(p), SnapshotId: req.SnapshotId, Query: req.Query, RetrievalProfileId: req.RetrievalProfileId,
-		Deadline: timestamppb.New(time.Now().Add(c.timeout))}
+		MaxContextItems: defaultMaxContextItems, Deadline: timestamppb.New(deadline)}
 	if req.MaxContextItems != nil {
 		in.MaxContextItems = uint32(*req.MaxContextItems)
 	}
-	resp, err := c.retrieval.Search(ctx, in)
+	return in
+}
+
+func (c *Client) Search(ctx context.Context, p application.Principal, req agentapi.SearchRequest) (agentapi.SearchResponse, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+	resp, err := c.retrieval.Search(ctx, searchRequest(p, req, time.Now().Add(c.timeout)))
 	if err != nil {
 		return agentapi.SearchResponse{}, control.MapError(err, "knowledge")
 	}
