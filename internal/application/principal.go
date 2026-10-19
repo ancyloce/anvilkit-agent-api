@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ancyloce/anvilkit-agent-contracts/go/agentapi"
 )
 
 var (
@@ -236,6 +238,15 @@ type Control interface {
 	// GetRelease reads the committed release of a release operation of the
 	// principal's tenant (P21).
 	GetRelease(ctx context.Context, p Principal, operationID string) (ReleaseView, error)
+	// BeginRecovery, GetRecovery, ListRecoveryFindings and DisposeObligation
+	// are API-17 (F-P3.7-1), the operator's recovery routes over Control's
+	// RecoveryService. Control decides the operator role from the
+	// principal's verified roles and discloses a run only to an operator of
+	// its scope; existing reports a command Control had already applied.
+	BeginRecovery(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.BeginRecoveryRequest) (run agentapi.RecoveryRun, existing bool, err error)
+	GetRecovery(ctx context.Context, p Principal, runID string) (agentapi.RecoveryRun, error)
+	ListRecoveryFindings(ctx context.Context, p Principal, runID string, params agentapi.ListRecoveryFindingsParams) (agentapi.FindingPage, error)
+	DisposeObligation(ctx context.Context, cmd CommandIdentity, p Principal, runID string, req agentapi.DisposeObligationRequest) (d agentapi.Disposition, existing bool, err error)
 }
 
 // OperationSubject is what API-02 binds an operation to; SourceHandle is
