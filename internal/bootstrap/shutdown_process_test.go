@@ -107,7 +107,7 @@ telemetry:
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o600))
 	var logs bytes.Buffer
 	proc := exec.Command(bin)
-	proc.Env = append(os.Environ(), "ANVILKIT_API_CONFIG="+filepath.Join(dir, "config.yaml"))
+	proc.Env = append(withoutAmbientConfig(os.Environ()), "ANVILKIT_API_CONFIG="+filepath.Join(dir, "config.yaml"))
 	proc.Stdout, proc.Stderr = &logs, &logs
 	require.NoError(t, proc.Start())
 	defer func() { _ = proc.Process.Kill() }()
@@ -168,4 +168,17 @@ telemetry:
 	}
 	require.Greater(t, collector.spans.Load(), int32(0), "the traces were flushed to the collector at stop")
 	t.Logf("P1.7 AC3: SIGTERM with 3 open streams: each ended with the end event, stopped in %s (drain %s), exit 0, %d spans flushed", took.Round(time.Millisecond), drain, collector.spans.Load())
+}
+
+// withoutAmbientConfig drops the caller's ANVILKIT_ variables: a shell that
+// sourced .local/dev/env.sh names the development Control, which the
+// environment would place above the configuration this test writes.
+func withoutAmbientConfig(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "ANVILKIT_") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
