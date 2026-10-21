@@ -219,10 +219,12 @@ type Control interface {
 	GetOperation(ctx context.Context, p Principal, operationID string) (OperationView, error)
 	SubmitCommand(ctx context.Context, cmd CommandIdentity, p Principal, operationID, kind, expectedRevision, targetActivation string) (CommandReceipt, error)
 	GetCommand(ctx context.Context, p Principal, operationID, commandID string) (CommandReceipt, error)
-	// StreamEvents calls emit for every durable event after the cursor until
-	// the operation is terminal or ctx ends; a cursor that cannot be honored
-	// returns ErrResetRequired with the covered sequence.
-	StreamEvents(ctx context.Context, p Principal, operationID, afterSeq string, emit func(EventFrame) error) error
+	// StreamEvents calls admitted once Control accepted the stream (the
+	// response begins only then: a refusal before it, such as the tenant's
+	// stream cap, is returned as an error), then emit for every durable event
+	// after the cursor until the operation is terminal or ctx ends; a cursor
+	// that cannot be honored returns ErrResetRequired with the covered sequence.
+	StreamEvents(ctx context.Context, p Principal, operationID, afterSeq string, admitted func(), emit func(EventFrame) error) error
 	// BeginTransfer and FinalizeTransfer are API-12 over Control's
 	// ArtifactService; the API never touches the object store itself.
 	BeginTransfer(ctx context.Context, cmd CommandIdentity, p Principal, intent TransferIntent) (TransferView, error)
