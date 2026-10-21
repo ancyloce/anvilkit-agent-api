@@ -35,6 +35,9 @@ type Client struct {
 // mTLS identity, or plaintext under the loader's development guard).
 func Dial(address string, transport grpc.DialOption) (*Client, error) {
 	conn, err := grpc.NewClient(address, grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		// Every Control replica the address resolves to (a headless Service names
+		// them all) takes calls and streams; re-resolved when a connection ends.
+		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`),
 		// P3.6: the request identifier travels to the owner with every call.
 		grpc.WithChainUnaryInterceptor(requestid.UnaryClient()), grpc.WithChainStreamInterceptor(requestid.StreamClient()), transport, grpc.WithUnaryInterceptor(boundRPCWait))
 	if err != nil {
@@ -260,7 +263,7 @@ func (c *Client) GetCommand(ctx context.Context, p application.Principal, operat
 	return toReceipt(resp.GetReceipt()), nil
 }
 
-func (c *Client) StreamEvents(ctx context.Context, p application.Principal, operationID, afterSeq string, emit func(application.EventFrame) error) error {
+func (c *Client) StreamEvents(ctx context.Context, p application.Principal, operationID, afterSeq string, admitted func(), emit func(application.EventFrame) error) error {
 	// Verify the cursor against the committed projection first so an expired
 	// or overrun cursor becomes a reset frame instead of a silent gap.
 	page, err := c.ops.ListOperationEvents(ctx, &controlv1.ListOperationEventsRequest{Scope: scope(p), OperationId: operationID, AfterEventSeq: afterSeq, Limit: 1})
@@ -274,6 +277,21 @@ func (c *Client) StreamEvents(ctx context.Context, p application.Principal, oper
 	if err != nil {
 		return mapErr(err)
 	}
+	// Control sends the response headers once it admitted the stream (its
+	// stream caps); a refusal arrives instead as the stream's status, in a
+	// response without headers (Header then answers nil and no error, and the
+	// status is what Recv returns).
+	md, err := stream.Header()
+	if err != nil {
+		return mapErr(err)
+	}
+	if md == nil {
+		if _, err := stream.Recv(); err != nil && !errors.Is(err, io.EOF) {
+			return mapErr(err)
+		}
+		return nil
+	}
+	admitted()
 	for {
 		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
