@@ -230,7 +230,7 @@ func (f *fakeControl) FinalizeTransfer(_ context.Context, cmd application.Comman
 
 // StreamEvents honors the cursor: only events after it are emitted, and a
 // cursor beyond the covered sequence is a reset.
-func (f *fakeControl) StreamEvents(ctx context.Context, p application.Principal, id, after string, emit func(application.EventFrame) error) error {
+func (f *fakeControl) StreamEvents(ctx context.Context, p application.Principal, id, after string, admitted func(), emit func(application.EventFrame) error) error {
 	if _, err := f.GetOperation(ctx, p, id); err != nil {
 		return err
 	}
@@ -244,6 +244,7 @@ func (f *fakeControl) StreamEvents(ctx context.Context, p application.Principal,
 	if cursor > covered {
 		return &application.ResetRequired{CoveredEventSeq: strconv.Itoa(covered)}
 	}
+	admitted()
 	sent := cursor
 	for {
 		f.mu.Lock()

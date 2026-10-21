@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 
 	controlv1 "github.com/ancyloce/anvilkit-agent-contracts/go/anvilkit/control/v1"
 )
@@ -41,6 +42,10 @@ func (operationsFake) ListOperationEvents(context.Context, *controlv1.ListOperat
 }
 
 func (operationsFake) StreamOperationEvents(_ *controlv1.StreamOperationEventsRequest, s grpc.ServerStreamingServer[controlv1.StreamOperationEventsResponse]) error {
+	// Admitted as Control admits a stream (its response headers), then open.
+	if err := s.SendHeader(metadata.Pairs("anvilkit-stream", "admitted")); err != nil {
+		return err
+	}
 	<-s.Context().Done()
 	return s.Context().Err()
 }

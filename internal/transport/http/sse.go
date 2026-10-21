@@ -100,18 +100,13 @@ func streamEvents(control application.Control, bounds StreamBounds, limiter *str
 			return
 		}
 		defer release()
-		w := c.Writer
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("X-Accel-Buffering", "no")
-		sse.Event{}.WriteContentType(w)
-		w.WriteHeader(http.StatusOK)
-		w.Flush()
 
 		ctx, cancel := context.WithCancel(c.Request.Context())
 		frames := make(chan []byte, bounds.FrameBuffer)
 		done := make(chan error, 1)
+		admitted := make(chan struct{})
 		go func() {
-			done <- control.StreamEvents(ctx, p, operationID, after, func(f application.EventFrame) error {
+			done <- control.StreamEvents(ctx, p, operationID, after, func() { close(admitted) }, func(f application.EventFrame) error {
 				b, err := encodeFrame(f)
 				if err != nil {
 					return err
@@ -136,6 +131,33 @@ func streamEvents(control application.Control, bounds StreamBounds, limiter *str
 			}
 		}()
 
+		// The response begins only once Control admitted the stream (D-7): a
+		// refusal before that (Control's stream caps) is a retryable error
+		// envelope, a 429 with Retry-After, never a 200 that ends without an
+		// event, which API-04 reads as a terminal operation.
+		var early error
+		select {
+		case <-admitted:
+		case early = <-done:
+			ended = true
+		case <-draining:
+			fail(c, &apiError{status: http.StatusServiceUnavailable, code: "DEPENDENCY_UNAVAILABLE", message: "the server is shutting down", retryable: true})
+			return
+		case <-ctx.Done():
+			return // the client went away
+		}
+		var reset *application.ResetRequired
+		if early != nil && !errors.As(early, &reset) {
+			fail(c, fromControl(early))
+			return
+		}
+		w := c.Writer
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Accel-Buffering", "no")
+		sse.Event{}.WriteContentType(w)
+		w.WriteHeader(http.StatusOK)
+		w.Flush()
+
 		controller := http.NewResponseController(w)
 		write := func(b []byte) bool {
 			if err := controller.SetWriteDeadline(time.Now().Add(bounds.WriteTimeout)); err != nil {
@@ -151,6 +173,16 @@ func streamEvents(control application.Control, bounds StreamBounds, limiter *str
 		// does not bring every viewer back in the same instant; written and
 		// checked like every other frame.
 		if !write([]byte(fmt.Sprintf("retry: %d\n\n", retryMillis(bounds.RetryBase)))) {
+			return
+		}
+		if ended {
+			// The cursor needed a reset (before any admission), or the stream
+			// had nothing to send and the operation is terminal.
+			if reset != nil {
+				if b, err := encodeReset(operationID, reset.CoveredEventSeq); err == nil {
+					write(b)
+				}
+			}
 			return
 		}
 		heartbeat := time.NewTicker(bounds.HeartbeatInterval)
@@ -178,9 +210,16 @@ func streamEvents(control application.Control, bounds StreamBounds, limiter *str
 						drained = true
 					}
 				}
-				var reset *application.ResetRequired
-				if errors.As(err, &reset) {
+				switch {
+				case errors.As(err, &reset):
 					if b, err := encodeReset(operationID, reset.CoveredEventSeq); err == nil {
+						write(b)
+					}
+				case err != nil && !errors.Is(err, errSlowConsumer) && c.Request.Context().Err() == nil:
+					// Control ended the stream on its own (a connection aged out, a
+					// replica restarted): the client resumes from its last event id
+					// after the retry interval and loses nothing (API-04).
+					if b, err := encodeEnd(operationID, "server_shutdown"); err == nil {
 						write(b)
 					}
 				}

@@ -3,6 +3,7 @@ package http_test
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -31,12 +32,16 @@ type streamFake struct {
 	returned  atomic.Int32
 	streamErr atomic.Value // streamResult
 	emitted   atomic.Int32
+	// refuse is returned before admission (Control's stream caps); failAfter,
+	// when set, is returned after the burst instead of a terminal end.
+	refuse    error
+	failAfter error
 }
 
 type streamResult struct{ err error }
 
-func (f *streamFake) StreamEvents(ctx context.Context, p application.Principal, id, after string, emit func(application.EventFrame) error) error {
-	err := f.stream(ctx, p, id, emit)
+func (f *streamFake) StreamEvents(ctx context.Context, p application.Principal, id, after string, admitted func(), emit func(application.EventFrame) error) error {
+	err := f.stream(ctx, p, id, admitted, emit)
 	f.streamErr.Store(streamResult{err})
 	f.returned.Add(1)
 	return err
@@ -44,10 +49,14 @@ func (f *streamFake) StreamEvents(ctx context.Context, p application.Principal, 
 
 func (f *streamFake) result() error { r, _ := f.streamErr.Load().(streamResult); return r.err }
 
-func (f *streamFake) stream(ctx context.Context, p application.Principal, id string, emit func(application.EventFrame) error) error {
+func (f *streamFake) stream(ctx context.Context, p application.Principal, id string, admitted func(), emit func(application.EventFrame) error) error {
 	if _, err := f.GetOperation(ctx, p, id); err != nil {
 		return err
 	}
+	if f.refuse != nil {
+		return f.refuse
+	}
+	admitted()
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	for i := 1; i <= f.burst; i++ {
 		if f.blockAt > 0 && i > f.blockAt {
@@ -60,7 +69,7 @@ func (f *streamFake) stream(ctx context.Context, p application.Principal, id str
 		}
 		f.emitted.Add(1)
 	}
-	return nil
+	return f.failAfter
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
@@ -256,4 +265,46 @@ func TestSSERequiresWriteDeadlineSupport(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Empty(t, rec.Body.String(), "no frame is written to a connection whose writes cannot be bounded")
+}
+
+// D-7: a stream Control refuses before admitting it (its stream caps) is a
+// retryable 429 with Retry-After in the error envelope, never a 200 that
+// ends without an event (which API-04 reads as a terminal operation).
+func TestSSEAStreamControlRefusesIsA429WithRetryAfter(t *testing.T) {
+	fake := &streamFake{burst: 3, refuse: &application.ControlError{Code: "CAPACITY_EXHAUSTED", Message: "streams of the tenant", Retryable: true}}
+	ts, _ := newStreamServer(t, fake, testOptions().Stream)
+	resp := sseRequest(t, ts, "/api/v1/operations/op_s1/events", "token-tenant-a-0123456789", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	require.NotEmpty(t, resp.Header.Get("Retry-After"))
+	require.NotContains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+	var body struct {
+		Error struct {
+			Code      string `json:"code"`
+			Retryable bool   `json:"retryable"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, "CAPACITY_EXHAUSTED", body.Error.Code)
+	require.True(t, body.Error.Retryable)
+	require.EqualValues(t, 0, fake.emitted.Load())
+}
+
+// A stream Control ends on its own after admitting it (a connection aged
+// out, a replica restarted) ends with an end frame (server_shutdown) after
+// the delivered events, so the client resumes from its last event id.
+func TestSSEAStreamControlEndsOnItsOwnEndsWithAnEndFrame(t *testing.T) {
+	fake := &streamFake{burst: 2, failAfter: &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: "unavailable", Retryable: true}}
+	ts, _ := newStreamServer(t, fake, testOptions().Stream)
+	resp := sseRequest(t, ts, "/api/v1/operations/op_s1/events", "token-tenant-a-0123456789", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	events, err := sse.Decode(resp.Body)
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	require.Equal(t, "operation.changed", events[0].Event)
+	require.Equal(t, "operation.changed", events[1].Event)
+	require.Equal(t, "end", events[2].Event)
+	require.Empty(t, events[2].Id, "an end frame carries no id")
+	require.Contains(t, events[2].Data.(string), `"reason":"server_shutdown"`)
 }
