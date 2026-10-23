@@ -91,6 +91,8 @@ type OperationView struct {
 	ActiveDeadline *time.Time
 	// Clarification is the open question set of a waiting preparation.
 	Clarification *Clarification
+	// Progress is the newest attempt-bound fact; nil before the first attempt.
+	Progress *OperationProgress
 }
 
 // Clarification mirrors agent.yaml#/components/schemas/Clarification.
@@ -156,6 +158,31 @@ type EventFrame struct {
 	Cleanup      string
 	Finance      string
 	FailureCode  string
+	// Attempt-bound facts (plan 0005 Phase 2): the attempt the transition
+	// belongs to, the accepted result's verdict, the trusted coordinator's
+	// node boundary. Empty members are omitted on the wire.
+	Step           string
+	Visit          string
+	AttemptOrdinal string
+	Verdict        string
+	VerdictCode    string
+	Node           string
+	NodeState      string
+	Round          string
+	OutcomeCode    string
+}
+
+// OperationProgress is the newest attempt-bound fact of an operation as the
+// snapshot reports it (plan 0005 Phase 2), with the event sequence it comes
+// from.
+type OperationProgress struct {
+	Step           string
+	Visit          string
+	AttemptOrdinal string
+	Node           string
+	NodeState      string
+	Round          string
+	EventSeq       string
 }
 
 // TransferIntent is what a caller submits to begin a scoped artifact
