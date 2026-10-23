@@ -108,6 +108,9 @@ func toView(v *controlv1.OperationView) application.OperationView {
 		t := v.GetActiveDeadline().AsTime()
 		out.ActiveDeadline = &t
 	}
+	if pr := v.GetProgress(); pr != nil {
+		out.Progress = &application.OperationProgress{Step: pr.GetStep(), Visit: pr.GetVisit(), AttemptOrdinal: pr.GetAttemptOrdinal(), Node: pr.GetNode(), NodeState: pr.GetNodeState(), Round: pr.GetRound(), EventSeq: pr.GetEventSeq()}
+	}
 	if c := v.GetClarification(); c != nil {
 		cl := &application.Clarification{QuestionSetID: c.GetQuestionSetId(), QuestionSetRevision: c.GetQuestionSetRevision(), Round: c.GetRound(), AskedAt: c.GetAskedAt().AsTime(), ExpiresAt: c.GetExpiresAt().AsTime()}
 		for _, q := range c.GetQuestions() {
@@ -307,6 +310,12 @@ func (c *Client) StreamEvents(ctx context.Context, p application.Principal, oper
 			Revision: ev.GetRevision(), OccurredAt: ev.GetOccurredAt().AsTime(),
 			Lifecycle: enumWord(ch.GetLifecycle().String(), "LIFECYCLE_"), Phase: ch.GetPhase(), Control: enumWord(ch.GetControl().String(), "CONTROL_STATE_"),
 			Cleanup: enumWord(ch.GetCleanup().String(), "CLEANUP_STATE_"), Finance: enumWord(ch.GetFinance().String(), "FINANCE_STATE_"), FailureCode: ch.GetFailureCode(),
+			// Attempt-bound facts (plan 0005 Phase 2); an unspecified verdict stays empty.
+			Step: ch.GetStep(), Visit: ch.GetVisit(), AttemptOrdinal: ch.GetAttemptOrdinal(), VerdictCode: ch.GetVerdictCode(),
+			Node: ch.GetNode(), NodeState: ch.GetNodeState(), Round: ch.GetRound(), OutcomeCode: ch.GetOutcomeCode(),
+		}
+		if ch.GetVerdict() != controlv1.Verdict_VERDICT_UNSPECIFIED {
+			frame.Verdict = enumWord(ch.GetVerdict().String(), "VERDICT_")
 		}
 		if err := emit(frame); err != nil {
 			return err
