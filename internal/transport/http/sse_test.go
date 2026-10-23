@@ -64,6 +64,17 @@ func (f *streamFake) stream(ctx context.Context, p application.Principal, id str
 			return ctx.Err()
 		}
 		frame := application.EventFrame{OperationID: id, EventSeq: itoa(i), TransitionID: "t" + itoa(i) + f.filler, EventType: "operation.changed", Revision: itoa(i), OccurredAt: now, Lifecycle: "running", Phase: "running", Control: "none", Cleanup: "pending", Finance: "not_funded"}
+		// Plan 0005 Phase 2: even frames belong to an attempt; the fourth
+		// carries a verdict, the second a node boundary.
+		if i%2 == 0 {
+			frame.Step, frame.Visit, frame.AttemptOrdinal = "codegen", "0", "1"
+		}
+		if i == 2 {
+			frame.Node, frame.NodeState, frame.Round = "code", "started", "1"
+		}
+		if i == 4 {
+			frame.Phase, frame.Verdict, frame.VerdictCode = "result_accepted", "repairable", "CANDIDATE_TEST_FAILED"
+		}
 		if err := emit(frame); err != nil {
 			return err
 		}
@@ -132,6 +143,25 @@ func TestSSEFramesAreLibraryEncoded(t *testing.T) {
 		require.Contains(t, data, `"eventSeq":"`+itoa(i+1)+`"`)
 		require.Contains(t, data, `"transitionId":"t`+itoa(i+1)+`"`)
 		require.NotContains(t, data, "failureCode", "absent optional members are omitted")
+		// Plan 0005 Phase 2: attempt-bound facts travel only on the frames that carry them.
+		if (i+1)%2 == 0 {
+			require.Contains(t, data, `"step":"codegen"`)
+			require.Contains(t, data, `"visit":"0"`)
+			require.Contains(t, data, `"attemptOrdinal":"1"`)
+		} else {
+			require.NotContains(t, data, `"step"`)
+		}
+		if i+1 == 2 {
+			require.Contains(t, data, `"node":"code"`)
+			require.Contains(t, data, `"nodeState":"started"`)
+			require.Contains(t, data, `"round":"1"`)
+		}
+		if i+1 == 4 {
+			require.Contains(t, data, `"verdict":"repairable"`)
+			require.Contains(t, data, `"verdictCode":"CANDIDATE_TEST_FAILED"`)
+		} else {
+			require.NotContains(t, data, `"verdict"`)
+		}
 	}
 	waitReturned(t, fake, time.Second)
 	require.NoError(t, fake.result())

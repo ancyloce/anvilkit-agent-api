@@ -70,6 +70,22 @@ func viewToPublic(v application.OperationView) agentapi.OperationView {
 		t := v.ActiveDeadline.UTC()
 		out.ActiveDeadline = &t
 	}
+	if pr := v.Progress; pr != nil {
+		p := &agentapi.OperationProgress{Step: pr.Step, Visit: pr.Visit, AttemptOrdinal: pr.AttemptOrdinal, EventSeq: pr.EventSeq}
+		if pr.Node != "" {
+			n := agentapi.ProgressNode(pr.Node)
+			p.Node = &n
+		}
+		if pr.NodeState != "" {
+			s := agentapi.ProgressNodeState(pr.NodeState)
+			p.NodeState = &s
+		}
+		if pr.Round != "" {
+			r := pr.Round
+			p.Round = &r
+		}
+		out.Progress = p
+	}
 	if c := v.Clarification; c != nil {
 		questions := make([]agentapi.Question, 0, len(c.Questions))
 		for _, q := range c.Questions {

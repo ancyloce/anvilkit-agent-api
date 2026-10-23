@@ -260,7 +260,12 @@ func encodeFrame(f application.EventFrame) ([]byte, error) {
 	payload, err := json.Marshal(map[string]any{
 		"operationId": f.OperationID, "eventSeq": f.EventSeq, "transitionId": f.TransitionID, "eventType": f.EventType,
 		"revision": f.Revision, "occurredAt": f.OccurredAt.UTC().Format(time.RFC3339Nano),
-		"payload": omitEmpty(map[string]any{"lifecycle": f.Lifecycle, "phase": f.Phase, "control": f.Control, "cleanup": f.Cleanup, "finance": f.Finance, "failureCode": f.FailureCode}),
+		"payload": omitEmpty(map[string]any{
+			"lifecycle": f.Lifecycle, "phase": f.Phase, "control": f.Control, "cleanup": f.Cleanup, "finance": f.Finance, "failureCode": f.FailureCode,
+			// Attempt-bound facts (plan 0005 Phase 2); absent members are omitted.
+			"step": f.Step, "visit": f.Visit, "attemptOrdinal": f.AttemptOrdinal, "verdict": f.Verdict, "verdictCode": f.VerdictCode,
+			"node": f.Node, "nodeState": f.NodeState, "round": f.Round, "outcomeCode": f.OutcomeCode,
+		}),
 	})
 	if err != nil {
 		return nil, err
