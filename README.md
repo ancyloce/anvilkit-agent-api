@@ -37,7 +37,7 @@ helm lint deploy/chart --set control.address=control:9101 --set auth.principalsS
 The contract module is an ordinary published dependency: the version in the generated line below is a tag of the `anvilkit-agent-contracts` repository, served by `proxy.golang.org` and verified against the checksum database (`go.sum`; the zip includes that repository's root `LICENSE`, as Go requires for a module in a subdirectory). No replace directive, workspace or local proxy is involved; a newer contract version is adopted by changing the `require` line.
 
 <!-- generated:contracts -->
-Contracts: this build requires `github.com/ancyloce/anvilkit-agent-contracts/go v0.1.16` (`go.mod`; tag `go/v0.1.16`).
+Contracts: this build requires `github.com/ancyloce/anvilkit-agent-contracts/go v0.1.17` (`go.mod`; tag `go/v0.1.17`).
 <!-- /generated:contracts -->
 
 ## Deploy
