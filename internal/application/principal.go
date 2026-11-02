@@ -1,7 +1,7 @@
 // Package application holds the API's use-case layer: verified principals,
-// command identity derivation and the Control-facing port. It has no
-// business database and no Temporal, Pagix or provider client (architecture
-// communication matrix).
+// command identity derivation, the Control port and the Knowledge and MCP
+// gateway ports. It has no business database and no Temporal, Pagix or
+// provider client (architecture communication matrix).
 package application
 
 import (
@@ -234,7 +234,8 @@ type ControlError struct {
 
 func (e *ControlError) Error() string { return e.Code + ": " + e.Message }
 
-// Control is the port to anvilkit-agent-control's OperationService.
+// Control is the port to anvilkit-agent-control: its OperationService and
+// the preparation, artifact, preview, release and recovery services.
 type Control interface {
 	CreateOperation(ctx context.Context, cmd CommandIdentity, p Principal, kind string, subject OperationSubject) (OperationView, error)
 	// CreatePreparation is API-01 over Control's OperationService: the
@@ -250,7 +251,7 @@ type Control interface {
 	// response begins only then: a refusal before it, such as the tenant's
 	// stream cap, is returned as an error), then emit for every durable event
 	// after the cursor until the operation is terminal or ctx ends; a cursor
-	// that cannot be honored returns ErrResetRequired with the covered sequence.
+	// that cannot be honored returns *ResetRequired with the covered sequence.
 	StreamEvents(ctx context.Context, p Principal, operationID, afterSeq string, admitted func(), emit func(EventFrame) error) error
 	// BeginTransfer and FinalizeTransfer are API-12 over Control's
 	// ArtifactService; the API never touches the object store itself.

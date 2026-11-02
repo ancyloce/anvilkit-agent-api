@@ -128,8 +128,8 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// Delegate cancellation and deadlines to the incoming HTTP request.
 	engine.ContextWithFallback = true
 	// Errors are collected with c.Error and rendered once by errorEnvelope,
-	// which is registered first so it runs last; a panic becomes the same
-	// envelope through Gin's recovery.
+	// which is registered before Gin's recovery so it renders after it: a
+	// panic becomes the same envelope.
 	// observe is outermost: it records the status the envelope finally wrote.
 	// requestID names the request on its span and in its context (sent to
 	// the owners); logRequests writes its line after the envelope rendered.

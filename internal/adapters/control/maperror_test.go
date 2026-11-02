@@ -12,8 +12,9 @@ import (
 	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 )
 
-// MapError keeps every code on the public contract's list: an owner's own
-// precondition code stays in the message of a conflict.
+// TestMapError checks that MapError keeps every code on the public
+// contract's list: an owner's own precondition code stays in the message
+// of a conflict.
 func TestMapError(t *testing.T) {
 	for in, want := range map[error]string{
 		status.Error(codes.PermissionDenied, "FORBIDDEN: not a grant manager"):    "FORBIDDEN",

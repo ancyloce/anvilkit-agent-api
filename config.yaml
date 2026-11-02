@@ -1,17 +1,16 @@
 # anvilkit-agent-api configuration (reviewed, secret-free). Loaded by
-# internal/config with precedence defaults < this file < allowed environment
-# overrides (ANVILKIT_API_LISTEN, ANVILKIT_API_CONTROL_ADDRESS,
-# ANVILKIT_API_AUTH_MODE, ANVILKIT_API_PRINCIPALS_FILE,
-# ANVILKIT_API_IDENTITY_{CERT,KEY,CA}_FILE). Unknown keys fail
-# startup. Secrets never belong here; the fixture principals file is a
-# DEVELOPMENT_ONLY input supplied by path through the environment.
+# internal/config with precedence defaults < this file < the allowed
+# environment overrides (the placements of envOverrides in
+# internal/config/config.go). Unknown keys fail startup. Secrets never
+# belong here; the fixture principals file is a DEVELOPMENT_ONLY input
+# supplied by path through the environment.
 #
 # development: the top-level DEVELOPMENT_ONLY guard (P0.1). This checked-in
-# file configures host-side runs on the development foundation, whose OTLP
-# collector is plaintext; every plaintext connection names its own
-# development mode as well. The guard downgrades nothing by itself: the
-# gRPC clients below stay mtls. The chart renders its own file with the
-# guard off.
+# file configures host-side runs on the development foundation, whose OIDC
+# provider is plaintext http (auth below) and whose runs select the fixture
+# principals file; both are admitted only while this is true. The guard
+# downgrades nothing by itself: the gRPC clients below stay mtls. The chart
+# renders its own file with the guard off.
 development:
   enabled: true
 # identity: the process's workload certificate, key and CA bundle

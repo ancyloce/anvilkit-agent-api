@@ -1,7 +1,7 @@
-// Package control is the API's grpc-go client adapter for
-// anvilkit.control.v1.OperationService. The transport identity is the
-// workload's mTLS certificate (P0.1); plaintext exists only under the
-// development guard.
+// Package control is the API's grpc-go client adapter for Control's
+// anvilkit.control.v1 services (OperationService, Preparation, Artifact,
+// Preview, Release, Recovery). The transport identity is the workload's
+// mTLS certificate (P0.1); plaintext exists only under the development guard.
 package control
 
 import (
@@ -46,8 +46,9 @@ func Dial(address string, transport grpc.DialOption) (*Client, error) {
 	return &Client{conn: conn, ops: controlv1.NewOperationServiceClient(conn), artifacts: controlv1.NewArtifactServiceClient(conn), preparations: controlv1.NewPreparationServiceClient(conn)}, nil
 }
 
-// Bound transport waiting. WithTimeout preserves an earlier caller deadline;
-// ending this wait never issues a business cancellation command.
+// boundRPCWait bounds the transport wait of a unary call to 15s.
+// WithTimeout preserves an earlier caller deadline; ending this wait never
+// issues a business cancellation command.
 func boundRPCWait(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

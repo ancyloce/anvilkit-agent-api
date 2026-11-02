@@ -23,10 +23,10 @@ import (
 )
 
 // Claims names where each Principal field is read in the token: a claim
-// name, or a dot-separated path into nested objects. A configured path is
-// required in every token (an absent project would read as the
-// tenant-wide scope of a platform workload); an empty Project or Roles
-// path reads none.
+// name, or a dot-separated path into nested objects. A configured Tenant,
+// Actor or Project path is required in every token (an absent project
+// would read as the tenant-wide scope of a platform workload); an absent
+// roles claim reads as no roles; an empty Project or Roles path reads none.
 type Claims struct {
 	Tenant  string
 	Project string

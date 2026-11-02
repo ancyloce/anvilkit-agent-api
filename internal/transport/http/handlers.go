@@ -14,8 +14,9 @@ import (
 )
 
 // strictHandlers implements the generated StrictServerInterface: Control
-// for operations, preparations, previews and artifacts, the Knowledge and
-// MCP gateways for API-07..API-16 (P20).
+// for operations, preparations, artifacts, previews, sources, releases and
+// recovery (API-17), the Knowledge and MCP gateways for their routes of
+// API-07..API-16 (P20).
 type strictHandlers struct {
 	control application.Control
 	// knowledge and mcp are the gateways to the owning services (P20);

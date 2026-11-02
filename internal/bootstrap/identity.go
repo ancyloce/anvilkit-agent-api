@@ -95,9 +95,9 @@ func (ids *identities) client(name string, ci config.ClientIdentity, defaultServ
 	return nil, fmt.Errorf("%s.identity: unknown mode %q", name, ci.Mode)
 }
 
-// collector is the transport credential of the OTLP exporter under a
-// ClientTLS section (tls verifies against the bundle read once; mtls
-// rotates with its own files).
+// collectorCredentials is the transport credential of the OTLP exporter
+// under a ClientTLS section (tls verifies against the bundle read once;
+// mtls rotates with its own files).
 func (ids *identities) collectorCredentials(name string, t config.ClientTLS) (credentials.TransportCredentials, error) {
 	switch t.Mode {
 	case "development":
@@ -126,7 +126,7 @@ func (ids *identities) collectorCredentials(name string, t config.ClientTLS) (cr
 	return nil, fmt.Errorf("%s: unknown mode %q", name, t.Mode)
 }
 
-// collector is collectorCredentials as a dial option (Temporal).
+// collector is collectorCredentials as a gRPC dial option.
 func (ids *identities) collector(name string, t config.ClientTLS) (grpc.DialOption, error) {
 	c, err := ids.collectorCredentials(name, t)
 	if err != nil {

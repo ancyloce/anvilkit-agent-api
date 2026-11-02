@@ -320,13 +320,14 @@ func errorMessage(out map[string]any) string {
 	return m
 }
 
-// readFrames reads SSE frames from a live stream with the field rule of the
-// protocol (and of sse.Decode): the value after the first colon, minus one
-// optional leading space. Comment lines are counted separately.
+// liveFrame is one SSE frame read from a live stream.
 type liveFrame struct {
 	ID, Event, Data string
 }
 
+// readFrames reads SSE frames from a live stream with the field rule of the
+// protocol (and of sse.Decode): the value after the first colon, minus one
+// optional leading space. Comment lines are counted separately.
 func readFrames(reader *bufio.Reader, stop func(liveFrame) bool) (frames []liveFrame, comments int, err error) {
 	cur := liveFrame{}
 	for {

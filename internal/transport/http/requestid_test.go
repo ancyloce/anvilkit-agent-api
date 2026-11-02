@@ -31,7 +31,8 @@ import (
 // P3.6 AC3 (API-09): the requestId of an error response is in the API's log
 // line, on the API's server span, and reaches the owner as gRPC metadata on
 // a server span of the same trace (the owners set it on their spans from
-// that metadata: Control's and MCP's requestid interceptors).
+// that metadata: Control's and MCP's requestid interceptors, Knowledge's
+// gRPC transport).
 func TestRequestIDReachesLogSpanAndOwner(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))

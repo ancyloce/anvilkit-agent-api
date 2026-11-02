@@ -37,8 +37,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 // controlled attributes only: the method, the route template and the status
 // (security.md: no bodies, headers, tokens, query values or caller
 // identifiers). The API is the trust boundary, so a caller's traceparent is
-// never adopted: each request starts a new trace, which the Control client
-// then propagates inward.
+// never adopted: each request starts a new trace, which the owner clients
+// (Control, Knowledge, MCP) then propagate inward.
 func observe(tracer trace.Tracer, m *Metrics) gin.HandlerFunc {
 	if tracer == nil {
 		tracer = noop.NewTracerProvider().Tracer("")
