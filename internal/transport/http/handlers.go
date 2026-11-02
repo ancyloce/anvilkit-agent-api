@@ -153,10 +153,6 @@ func deref(s *string) string {
 	return *s
 }
 
-func notDeployed(service string) error {
-	return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " is not deployed in this unit", Retryable: false}
-}
-
 // CreatePreparation (API-01) accepts a prompt artifact and the selected
 // references into a Preparation: the subject digest is the canonical
 // digest of the intake (the same intake under another command is the
