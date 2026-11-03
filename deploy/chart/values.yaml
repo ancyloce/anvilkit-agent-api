@@ -187,7 +187,8 @@ telemetry:
   metricsPort: 0
   # The collector transport while otlpEndpoint is set: tls verifies the
   # collector against caSecret (key ca.crt) and serverName, mtls also presents
-  # the workload certificate, development is plaintext (development.enabled).
+  # the workload certificate (identity.mode mtls), development is plaintext
+  # (development.enabled).
   otlpTls:
     mode: tls
     serverName: ""

@@ -89,6 +89,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and (ne .Values.telemetry.otlpTls.mode "development") (not .Values.telemetry.otlpTls.caSecret.name) }}
 {{- fail "telemetry.otlpTls.caSecret.name is required under telemetry.otlpTls.mode tls or mtls" }}
 {{- end }}
+{{- if and (eq .Values.telemetry.otlpTls.mode "mtls") (ne .Values.identity.mode "mtls") }}
+{{- fail "telemetry.otlpTls.mode mtls presents the workload certificate: it needs identity.mode mtls" }}
+{{- end }}
 {{- end }}
 {{- end -}}
 
@@ -124,6 +127,10 @@ the loader's keys. */}}
 {{- if ne .Values.telemetry.otlpTls.mode "development" }}
 {{- $_ = set $ot "ca_file" "/etc/anvilkit/otlp-ca/ca.crt" }}
 {{- if .Values.telemetry.otlpTls.serverName }}{{- $_ = set $ot "server_name" .Values.telemetry.otlpTls.serverName }}{{- end }}
+{{- end -}}
+{{- if eq .Values.telemetry.otlpTls.mode "mtls" }}
+{{- $_ = set $ot "cert_file" "/etc/anvilkit/identity/tls.crt" }}
+{{- $_ = set $ot "key_file" "/etc/anvilkit/identity/tls.key" }}
 {{- end -}}
 {{- $_ = set $cfg "telemetry" (merge (dict "otlp_tls" $ot) (default (dict) $cfg.telemetry)) -}}
 {{- end -}}
