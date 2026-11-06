@@ -36,5 +36,12 @@ jobs:
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: "v3.19.0"
-      - run: helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer --set auth.oidc.issuer=https://issuer.ci.example
-      - run: helm template anvilkit-agent-api deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer --set auth.oidc.issuer=https://issuer.ci.example > /dev/null
+      - run: helm lint deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer --set auth.oidc.issuer=https://issuer.ci.example --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000001
+      - run: helm template anvilkit-agent-api deploy/chart --set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer --set auth.oidc.issuer=https://issuer.ci.example --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000001 > /dev/null
+      - name: Refuse a tag-only image outside development (RB-S10)
+        run: |
+          sets=(--set control.address=control:9101 --set auth.principalsSecret.name=principals --set identity.trustDomain=ci.example --set identity.certificate.issuerRef.name=ci-issuer --set auth.oidc.issuer=https://issuer.ci.example)
+          if out=$(helm template anvilkit-agent-api deploy/chart "${sets[@]}" 2>&1); then echo "rendered a tag-only image outside development"; exit 1; fi
+          echo "$out" | grep -q "image.digest is required outside development" || { echo "$out"; exit 1; }
+          # The development guard keeps the tag (DEVELOPMENT_ONLY).
+          helm template anvilkit-agent-api deploy/chart "${sets[@]}" --set development.enabled=true > /dev/null
