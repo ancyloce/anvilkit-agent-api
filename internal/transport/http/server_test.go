@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -320,6 +321,49 @@ func errorMessage(out map[string]any) string {
 	return m
 }
 
+func errorField(out map[string]any) string {
+	e, _ := out["error"].(map[string]any)
+	d, _ := e["details"].(map[string]any)
+	f, _ := d["field"].(string)
+	return f
+}
+
+// RB-S13: a refused request is answered with a fixed message and its location in
+// details.field. Neither the rejected input nor the schema reaches the client:
+// the canary appears in no member of the envelope.
+func TestValidationRefusalsDoNotEchoTheRequest(t *testing.T) {
+	ts, _ := newServer(t)
+	token := "token-tenant-a-0123456789"
+	const canary = "CANARY-7f3a<script>x</script>"
+	const pathCanary = "CANARY-7f3a<x>" // one path segment: no "/"
+	subject := `"subject":{"profileId":"local-check-v1","subjectDigest":"` + digest + `"}`
+	for _, tc := range []struct{ name, method, path, body, field, message string }{
+		{"a body value violating its pattern", "POST", "/api/v1/operations",
+			`{"commandId":"` + canary + `","kind":"local_check",` + subject + `}`, "/commandId", "request body: a value violates pattern"},
+		{"a nested body value of the wrong type", "POST", "/api/v1/operations",
+			`{"commandId":"c1","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"` + digest + `","briefId":{"x":"` + canary + `"}}}`,
+			"/subject/briefId", "request body: a value has the wrong type"},
+		{"an undeclared member (reported at its parent, the document)", "POST", "/api/v1/operations",
+			`{"commandId":"c1","kind":"local_check",` + subject + `,"` + canary + `":1}`, "", "request body: a member the contract does not define"},
+		{"a path parameter violating its pattern", "GET", "/api/v1/operations/" + url.PathEscape(pathCanary), "", "operationId", "invalid path parameter"},
+		{"malformed JSON", "POST", "/api/v1/operations", `{"commandId": ` + canary + `}`, "", "invalid JSON at byte 15"},
+		{"a duplicate member", "POST", "/api/v1/operations", `{"` + canary + `":1,"` + canary + `":2}`, "", "invalid JSON: duplicate member"},
+		{"an SSE cursor", "GET", "/api/v1/operations/op_1/events?after=" + url.QueryEscape(canary), "", "after", "after must be a canonical sequence"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, out, _ := do(t, ts, tc.method, tc.path, token, tc.body)
+			require.Equal(t, 400, status, "%v", out)
+			require.Equal(t, "INVALID_ARGUMENT", errorCode(out), "%v", out)
+			require.Equal(t, tc.message, errorMessage(out))
+			require.Equal(t, tc.field, errorField(out))
+			envelope := mustJSON(t, out)
+			for _, leak := range []string{"CANARY", "Schema:", "Value:", "^[A-Za-z0-9][A-Za-z0-9._:-]*$"} {
+				require.NotContains(t, envelope, leak, "the envelope echoes the request or the schema")
+			}
+		})
+	}
+}
+
 // liveFrame is one SSE frame read from a live stream.
 type liveFrame struct {
 	ID, Event, Data string
@@ -392,11 +436,13 @@ func TestAPI(t *testing.T) {
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"c1","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"`+digest+`"},"tenantId":"tenant_b"}`)
 	require.Equal(t, 400, status, "unknown member rejected by the OpenAPI validator: %v", out)
 	require.Equal(t, "INVALID_ARGUMENT", errorCode(out))
-	require.Contains(t, errorMessage(out), "tenantId", "the validator names the unknown member: %v", out)
+	require.Equal(t, "request body: a member the contract does not define", errorMessage(out), "%v", out)
+	require.NotContains(t, mustJSON(t, out), "tenantId", "the undeclared member is client input, not echoed (RB-S13)")
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"c1","commandId":"c2","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"`+digest+`"}}`)
 	require.Equal(t, 400, status, "duplicate member rejected by the strict parser")
 	require.Contains(t, errorMessage(out), "duplicate member")
+	require.NotContains(t, mustJSON(t, out), "commandId", "the duplicated name is not echoed (RB-S13)")
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, createBody("c1")+" {}")
 	require.Equal(t, 400, status, "trailing data rejected")
@@ -407,11 +453,11 @@ func TestAPI(t *testing.T) {
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"c1","kind":"preparation","subject":{"profileId":"local-check-v1","subjectDigest":"`+digest+`"}}`)
 	require.Equal(t, 400, status, "enum outside the endpoint's kinds rejected")
-	require.Contains(t, errorMessage(out), "kind", "%v", out)
+	require.Equal(t, "/kind", errorField(out), "%v", out)
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"c1","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"`+digest+`","briefId":null}}`)
 	require.Equal(t, 400, status, "null is not absence")
-	require.Contains(t, errorMessage(out), "briefId", "%v", out)
+	require.Equal(t, "/subject/briefId", errorField(out), "%v", out)
 
 	status, out, hdr = do(t, ts, "POST", "/api/v1/operations", tokenA, createBody("c1"))
 	require.Equal(t, 202, status, "%v", out)
@@ -440,7 +486,7 @@ func TestAPI(t *testing.T) {
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/operations/op_c1/commands", tokenA, `{"commandId":"k1","kind":"cancel","expectedRevision":"02"}`)
 	require.Equal(t, 400, status, "leading-zero revision rejected by the schema pattern")
-	require.Contains(t, errorMessage(out), "expectedRevision", "%v", out)
+	require.Equal(t, "/expectedRevision", errorField(out), "%v", out)
 
 	status, out, _ = do(t, ts, "GET", "/api/v1/knowledge/sources/src_1", tokenA, "")
 	require.Equal(t, 503, status)
@@ -518,6 +564,7 @@ func TestAPI(t *testing.T) {
 	require.Equal(t, 400, status)
 	require.Equal(t, "INVALID_ARGUMENT", errorCode(out))
 	require.Contains(t, errorMessage(out), "after")
+	require.Equal(t, "after", errorField(out))
 	req, _ := http.NewRequest("GET", ts.URL+"/api/v1/operations/op_c1/events", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenA)
 	req.Header.Set("Last-Event-ID", "007")

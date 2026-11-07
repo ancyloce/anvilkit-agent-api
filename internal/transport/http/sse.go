@@ -40,13 +40,15 @@ type streamCursor struct {
 	LastEventID string `header:"Last-Event-ID" binding:"omitempty,sequence"`
 }
 
-func bindCursor(c *gin.Context) (string, error) {
+// bindCursor refuses a malformed cursor naming the parameter in details.field
+// and never the value (RB-S13).
+func bindCursor(c *gin.Context) (string, *apiError) {
 	var cur streamCursor
 	if err := c.ShouldBindQuery(&cur); err != nil {
-		return "", errors.New("after must be a canonical sequence")
+		return "", invalidField("after must be a canonical sequence", "after")
 	}
 	if err := c.ShouldBindHeader(&cur); err != nil {
-		return "", errors.New("Last-Event-ID must be a canonical sequence")
+		return "", invalidField("Last-Event-ID must be a canonical sequence", "Last-Event-ID")
 	}
 	if cur.After != "" {
 		return cur.After, nil
@@ -79,9 +81,9 @@ const (
 // performed and checked here, under the write deadline.
 func streamEvents(control application.Control, bounds StreamBounds, limiter *streamLimiter, draining <-chan struct{}) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		after, err := bindCursor(c)
-		if err != nil {
-			fail(c, invalidArgument(err.Error()))
+		after, refusal := bindCursor(c)
+		if refusal != nil {
+			fail(c, refusal)
 			return
 		}
 		operationID := c.Param("operationId")

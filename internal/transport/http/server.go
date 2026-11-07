@@ -18,9 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-gonic/gin"
-	ginmiddleware "github.com/oapi-codegen/gin-middleware"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -158,12 +156,10 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// same canonical-sequence rule and its frames come from gin-contrib/sse.
 	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream, newStreamLimiter(opts.Stream.MaxStreams, opts.Stream.MaxStreamsPerPrincipal), draining))
 
-	validator := ginmiddleware.OapiRequestValidatorWithOptions(spec, &ginmiddleware.Options{
-		Options: openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc},
-		ErrorHandler: func(c *gin.Context, message string, statusCode int) {
-			fail(c, invalidArgument(message))
-		},
-	})
+	validator, err := requestValidator(spec)
+	if err != nil {
+		return nil, err
+	}
 	window := opts.TransferWindow
 	if window <= 0 {
 		window = 15 * time.Minute
@@ -173,7 +169,8 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 		prepProfile = "preparation-v1"
 	}
 	handlers := agentapi.NewStrictHandlerWithOptions(&strictHandlers{control: control, knowledge: gateways.knowledge(), mcp: gateways.mcp(), transferWindow: window, preparationProfile: prepProfile}, nil, agentapi.StrictGinServerOptions{
-		RequestErrorHandlerFunc:  func(c *gin.Context, err error) { fail(c, invalidArgument(err.Error())) },
+		// RB-S13: a binding or decoding error quotes the input; the body has passed validation by now.
+		RequestErrorHandlerFunc:  func(c *gin.Context, err error) { fail(c, invalidArgument("request could not be decoded")) },
 		HandlerErrorFunc:         func(c *gin.Context, err error) { fail(c, fromControl(err)) },
 		ResponseErrorHandlerFunc: func(c *gin.Context, err error) { fail(c, fromControl(err)) },
 	})
@@ -320,6 +317,23 @@ func strictBody(limit int64) gin.HandlerFunc {
 	}
 }
 
+// errDuplicateMember names no member: the key is client input (RB-S13).
+var errDuplicateMember = errors.New("invalid JSON: duplicate member")
+
+// jsonError reports a malformed body without quoting it (RB-S13): the
+// decoder's messages quote the offending characters. A syntax error keeps
+// only its byte offset.
+func jsonError(err error) error {
+	if errors.Is(err, errDuplicateMember) {
+		return err
+	}
+	var se *json.SyntaxError
+	if errors.As(err, &se) {
+		return fmt.Errorf("invalid JSON at byte %d", se.Offset)
+	}
+	return errors.New("invalid JSON")
+}
+
 // strictDecode parses JSON with duplicate-member, trailing-value and
 // non-finite rejection; numbers stay json.Number so nothing is rounded.
 func strictDecode(raw []byte) (any, error) {
@@ -327,7 +341,7 @@ func strictDecode(raw []byte) (any, error) {
 	dec.UseNumber()
 	v, err := decodeValue(dec)
 	if err != nil {
-		return nil, fmt.Errorf("invalid JSON: %w", err)
+		return nil, jsonError(err)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("invalid JSON: trailing data after the document")
@@ -352,7 +366,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 				}
 				key, _ := keyTok.(string)
 				if _, dup := obj[key]; dup {
-					return nil, fmt.Errorf("duplicate member %q", key)
+					return nil, errDuplicateMember
 				}
 				val, err := decodeValue(dec)
 				if err != nil {
@@ -401,6 +415,7 @@ type apiError struct {
 	code      string
 	message   string
 	retryable bool
+	field     string // details.field: where a request was refused (RB-S13); never client input
 }
 
 func (e *apiError) Error() string { return e.code + ": " + e.message }
@@ -434,18 +449,24 @@ func errorEnvelope() gin.HandlerFunc {
 		if ae.retryable && (ae.status == http.StatusTooManyRequests || ae.status == http.StatusServiceUnavailable) {
 			c.Header("Retry-After", retryAfterSeconds(ae))
 		}
+		type details = struct {
+			CoveredEventSeq  *agentapi.Sequence `json:"coveredEventSeq,omitempty"`
+			CurrentRevision  *agentapi.Revision `json:"currentRevision,omitempty"`
+			ExpectedRevision *agentapi.Revision `json:"expectedRevision,omitempty"`
+			Field            *string            `json:"field,omitempty"`
+		}
+		var d *details
+		if ae.field != "" {
+			field := truncate(ae.field, 128)
+			d = &details{Field: &field}
+		}
 		c.JSON(ae.status, agentapi.ErrorEnvelope{Error: struct {
-			Code    agentapi.ErrorCode `json:"code"`
-			Details *struct {
-				CoveredEventSeq  *agentapi.Sequence `json:"coveredEventSeq,omitempty"`
-				CurrentRevision  *agentapi.Revision `json:"currentRevision,omitempty"`
-				ExpectedRevision *agentapi.Revision `json:"expectedRevision,omitempty"`
-				Field            *string            `json:"field,omitempty"`
-			} `json:"details,omitempty"`
-			Message   string      `json:"message"`
-			RequestId agentapi.Id `json:"requestId"`
-			Retryable bool        `json:"retryable"`
-		}{Code: agentapi.ErrorCode(ae.code), Message: truncate(ae.message, 512), RequestId: requestIDOf(c), Retryable: ae.retryable}})
+			Code      agentapi.ErrorCode `json:"code"`
+			Details   *details           `json:"details,omitempty"`
+			Message   string             `json:"message"`
+			RequestId agentapi.Id        `json:"requestId"`
+			Retryable bool               `json:"retryable"`
+		}{Code: agentapi.ErrorCode(ae.code), Details: d, Message: truncate(ae.message, 512), RequestId: requestIDOf(c), Retryable: ae.retryable}})
 	}
 }
 
