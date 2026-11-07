@@ -473,7 +473,10 @@ func errorEnvelope() gin.HandlerFunc {
 var httpStatus = map[string]int{
 	"INVALID_ARGUMENT": 400, "UNAUTHENTICATED": 401, "FORBIDDEN": 403, "NOT_FOUND": 404,
 	"REVISION_CONFLICT": 409, "IDEMPOTENCY_CONFLICT": 409, "STALE_EXECUTION": 409, "PROFILE_UNQUALIFIED": 409,
-	"CAPACITY_EXHAUSTED": 429, "BUDGET_EXHAUSTED": 429, "EFFECT_UNCERTAIN": 503, "DEPENDENCY_UNAVAILABLE": 503,
+	// RB-A24: an accepted business outcome the client inspects, not a 503 that
+	// clients and gateways retry on their own.
+	"EFFECT_UNCERTAIN":   409,
+	"CAPACITY_EXHAUSTED": 429, "BUDGET_EXHAUSTED": 429, "DEPENDENCY_UNAVAILABLE": 503,
 }
 
 // fromControl maps a Control-decided error to the public envelope
@@ -485,7 +488,9 @@ func fromControl(err error) *apiError {
 		if !ok {
 			status = http.StatusServiceUnavailable
 		}
-		return &apiError{status: status, code: ce.Code, message: ce.Message, retryable: ce.Retryable}
+		// EFFECT_UNCERTAIN is never retryable, whatever the adapter said (RB-A24);
+		// with 409 it also gets no Retry-After.
+		return &apiError{status: status, code: ce.Code, message: ce.Message, retryable: ce.Retryable && ce.Code != "EFFECT_UNCERTAIN"}
 	}
 	if errors.Is(err, application.ErrForbidden) {
 		return &apiError{status: http.StatusForbidden, code: "FORBIDDEN", message: "not permitted"}

@@ -66,7 +66,8 @@ type fakeControl struct {
 	events    map[string][]application.EventFrame
 	transfers map[string]application.TransferView
 	handles   map[string]string
-	panicOn   string // operation id whose GetOperation panics (recovery test)
+	panicOn   string           // operation id whose GetOperation panics (recovery test)
+	failOn    map[string]error // operation id -> the error GetOperation returns
 	previews  map[string]application.PreviewView
 	releases  map[string]application.ReleaseView
 	subjects  []application.OperationSubject
@@ -147,6 +148,9 @@ func (f *fakeControl) GetOperation(_ context.Context, p application.Principal, i
 	defer f.mu.Unlock()
 	if f.panicOn != "" && id == f.panicOn {
 		panic("control adapter panicked")
+	}
+	if err := f.failOn[id]; err != nil {
+		return application.OperationView{}, err
 	}
 	for _, v := range f.ops {
 		if v.OperationID == id && v.TenantID == p.TenantID {
@@ -319,6 +323,28 @@ func errorMessage(out map[string]any) string {
 	e, _ := out["error"].(map[string]any)
 	m, _ := e["message"].(string)
 	return m
+}
+
+// RB-A24: EFFECT_UNCERTAIN is an accepted business outcome, never a retryable
+// 503. It is a 409 with retryable false and no Retry-After, even when an adapter
+// marked it retryable. A dependency outage stays a retryable 503 with Retry-After.
+func TestEffectUncertainIsAConflictThatIsNeverRetried(t *testing.T) {
+	ts, fake := newServer(t)
+	fake.failOn = map[string]error{
+		"op_uncertain": &application.ControlError{Code: "EFFECT_UNCERTAIN", Message: "intake inventory write uncertain", Retryable: true},
+		"op_down":      &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: "control unavailable", Retryable: true},
+	}
+	token := "token-tenant-a-0123456789"
+	status, out, hdr := do(t, ts, "GET", "/api/v1/operations/op_uncertain", token, "")
+	require.Equal(t, 409, status, "%v", out)
+	require.Equal(t, "EFFECT_UNCERTAIN", errorCode(out))
+	require.Equal(t, false, out["error"].(map[string]any)["retryable"])
+	require.Empty(t, hdr.Get("Retry-After"))
+
+	status, out, hdr = do(t, ts, "GET", "/api/v1/operations/op_down", token, "")
+	require.Equal(t, 503, status, "%v", out)
+	require.Equal(t, true, out["error"].(map[string]any)["retryable"])
+	require.NotEmpty(t, hdr.Get("Retry-After"))
 }
 
 func errorField(out map[string]any) string {

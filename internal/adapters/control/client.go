@@ -185,6 +185,14 @@ func MapError(err error, service string) error {
 		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " unavailable", Retryable: true}
 	}
 	code, _, _ := strings.Cut(st.Message(), ":")
+	// RB-A24: EFFECT_UNCERTAIN is an accepted business outcome (contracts.md §4).
+	// The effect may have happened and is reconciled under its original identity,
+	// so it is never retryable, whichever gRPC code carries it: Control sends it
+	// with UNAVAILABLE for an uncertain inventory write and with
+	// FAILED_PRECONDITION for evidence that does not verify.
+	if code == "EFFECT_UNCERTAIN" {
+		return &application.ControlError{Code: "EFFECT_UNCERTAIN", Message: st.Message(), Retryable: false}
+	}
 	switch st.Code() {
 	case codes.NotFound:
 		return &application.ControlError{Code: "NOT_FOUND", Message: "not found", Retryable: false}
@@ -204,9 +212,6 @@ func MapError(err error, service string) error {
 	case codes.ResourceExhausted:
 		return &application.ControlError{Code: "CAPACITY_EXHAUSTED", Message: st.Message(), Retryable: true}
 	case codes.Unavailable:
-		if code == "EFFECT_UNCERTAIN" {
-			return &application.ControlError{Code: "EFFECT_UNCERTAIN", Message: st.Message(), Retryable: true}
-		}
 		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " unavailable", Retryable: true}
 	case codes.Canceled, codes.DeadlineExceeded:
 		return &application.ControlError{Code: "DEPENDENCY_UNAVAILABLE", Message: service + " call ended", Retryable: true}
