@@ -11,7 +11,7 @@ This repository holds the replacement implementation (Gin, oapi-codegen strict s
 | `cmd/anvilkit-agent-api` | `main`: `fx.New(bootstrap.Module()).Run()` |
 | `internal/bootstrap` | Fx assembly: configuration snapshot, logger, fixture verifier, Control client, HTTP server bound inside `OnStart` |
 | `internal/config`, `config.yaml` | One typed, validated configuration snapshot (defaults < the reviewed file < the allowlisted `ANVILKIT_API_*` overrides; unknown keys, ranges and cross-field rules reject the candidate) |
-| `internal/transport/http` | Gin engine, generated strict handlers, strict JSON body limit, SSE single-writer stream with bounded buffer, error envelope |
+| `internal/transport/http` | Gin engine, generated strict handlers, strict JSON body limit, kin-openapi request validation through its own adapter (refusals carry a fixed message and `details.field`, never the request or the schema; RB-S13, DEC-046), SSE single-writer stream with bounded buffer, error envelope |
 | `internal/application` | Principal and the Control port the transport calls |
 | `internal/adapters/control` | gRPC client of `anvilkit.control.v1` (OperationService) |
 | `internal/adapters/fixtureauth` | DEVELOPMENT_ONLY bearer-token principals file (`auth.mode: fixture`) until ENV-07 supplies the IdP protocol |
