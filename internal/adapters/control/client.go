@@ -193,6 +193,13 @@ func MapError(err error, service string) error {
 	if code == "EFFECT_UNCERTAIN" {
 		return &application.ControlError{Code: "EFFECT_UNCERTAIN", Message: st.Message(), Retryable: false}
 	}
+	// RB-A16: a budget refusal is BUDGET_EXHAUSTED, never a capacity refusal:
+	// no wait restores a spent budget, so it is not retryable, whichever gRPC
+	// code carries it (Control sends it with RESOURCE_EXHAUSTED, the code it
+	// shares with CAPACITY_EXHAUSTED).
+	if code == "BUDGET_EXHAUSTED" {
+		return &application.ControlError{Code: "BUDGET_EXHAUSTED", Message: st.Message(), Retryable: false}
+	}
 	switch st.Code() {
 	case codes.NotFound:
 		return &application.ControlError{Code: "NOT_FOUND", Message: "not found", Retryable: false}

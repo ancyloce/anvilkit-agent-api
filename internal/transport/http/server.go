@@ -479,6 +479,10 @@ var httpStatus = map[string]int{
 	"CAPACITY_EXHAUSTED": 429, "BUDGET_EXHAUSTED": 429, "DEPENDENCY_UNAVAILABLE": 503,
 }
 
+// neverRetryable are the public codes no wait resolves: an effect whose
+// outcome is uncertain (RB-A24) and a spent budget (RB-A16).
+var neverRetryable = map[string]bool{"EFFECT_UNCERTAIN": true, "BUDGET_EXHAUSTED": true}
+
 // fromControl maps a Control-decided error to the public envelope
 // (contracts.md §4).
 func fromControl(err error) *apiError {
@@ -488,9 +492,9 @@ func fromControl(err error) *apiError {
 		if !ok {
 			status = http.StatusServiceUnavailable
 		}
-		// EFFECT_UNCERTAIN is never retryable, whatever the adapter said (RB-A24);
-		// with 409 it also gets no Retry-After.
-		return &apiError{status: status, code: ce.Code, message: ce.Message, retryable: ce.Retryable && ce.Code != "EFFECT_UNCERTAIN"}
+		// No wait resolves these codes: never retryable, whatever the adapter
+		// said, so they get no Retry-After either (RB-A24, RB-A16).
+		return &apiError{status: status, code: ce.Code, message: ce.Message, retryable: ce.Retryable && !neverRetryable[ce.Code]}
 	}
 	if errors.Is(err, application.ErrForbidden) {
 		return &apiError{status: http.StatusForbidden, code: "FORBIDDEN", message: "not permitted"}

@@ -347,6 +347,29 @@ func TestEffectUncertainIsAConflictThatIsNeverRetried(t *testing.T) {
 	require.NotEmpty(t, hdr.Get("Retry-After"))
 }
 
+// RB-A16: a spent budget is a 429 BUDGET_EXHAUSTED with retryable false and no
+// Retry-After, even when an adapter marked it retryable; a capacity refusal
+// stays a retryable 429 with Retry-After.
+func TestBudgetExhaustedIsNotRetriedLikeCapacity(t *testing.T) {
+	ts, fake := newServer(t)
+	fake.failOn = map[string]error{
+		"op_budget":   &application.ControlError{Code: "BUDGET_EXHAUSTED", Message: "tenant pool spent", Retryable: true},
+		"op_capacity": &application.ControlError{Code: "CAPACITY_EXHAUSTED", Message: "no capacity", Retryable: true},
+	}
+	token := "token-tenant-a-0123456789"
+	status, out, hdr := do(t, ts, "GET", "/api/v1/operations/op_budget", token, "")
+	require.Equal(t, 429, status, "%v", out)
+	require.Equal(t, "BUDGET_EXHAUSTED", errorCode(out))
+	require.Equal(t, false, out["error"].(map[string]any)["retryable"])
+	require.Empty(t, hdr.Get("Retry-After"))
+
+	status, out, hdr = do(t, ts, "GET", "/api/v1/operations/op_capacity", token, "")
+	require.Equal(t, 429, status, "%v", out)
+	require.Equal(t, "CAPACITY_EXHAUSTED", errorCode(out))
+	require.Equal(t, true, out["error"].(map[string]any)["retryable"])
+	require.NotEmpty(t, hdr.Get("Retry-After"))
+}
+
 func errorField(out map[string]any) string {
 	e, _ := out["error"].(map[string]any)
 	d, _ := e["details"].(map[string]any)

@@ -31,6 +31,24 @@ func TestMapError(t *testing.T) {
 	}
 }
 
+// TestBudgetExhaustedIsNeverACapacityRefusal (RB-A16): a budget refusal keeps
+// its code and is not retryable under RESOURCE_EXHAUSTED (Control's code for
+// it) and under any other gRPC code; a capacity refusal stays retryable.
+func TestBudgetExhaustedIsNeverACapacityRefusal(t *testing.T) {
+	for _, c := range []codes.Code{codes.ResourceExhausted, codes.FailedPrecondition, codes.Aborted, codes.Unavailable} {
+		var ce *application.ControlError
+		require.True(t, errors.As(control.MapError(status.Error(c, "BUDGET_EXHAUSTED: tenant pool spent"), "control"), &ce))
+		require.Equal(t, "BUDGET_EXHAUSTED", ce.Code, c.String())
+		require.False(t, ce.Retryable, "%s carried BUDGET_EXHAUSTED as retryable", c)
+	}
+	for _, msg := range []string{"CAPACITY_EXHAUSTED", "resource exhausted"} {
+		var ce *application.ControlError
+		require.True(t, errors.As(control.MapError(status.Error(codes.ResourceExhausted, msg), "control"), &ce))
+		require.Equal(t, "CAPACITY_EXHAUSTED", ce.Code, msg)
+		require.True(t, ce.Retryable, msg)
+	}
+}
+
 // TestEffectUncertainIsNeverRetryable (RB-A24): the EFFECT_UNCERTAIN code is
 // non-retryable under every gRPC code that may carry it, today's (UNAVAILABLE,
 // FAILED_PRECONDITION) and any Control may switch to.
