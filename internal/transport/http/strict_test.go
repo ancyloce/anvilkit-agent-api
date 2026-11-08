@@ -88,11 +88,30 @@ func TestStrictRequestRefusals(t *testing.T) {
 		})
 	}
 
+	// RB-A31: the body bound (256 KiB here) is applied before any parsing: one
+	// byte over it is refused for its size; a body of exactly the bound reaches
+	// the schema, which refuses the padding member.
+	const bound = 256 << 10
+	padded := func(size int) string {
+		head := `{"commandId":"c1","kind":"local_check","subject":{"profileId":"local-check-v1","subjectDigest":"` + digest + `"},"pad":"`
+		return head + strings.Repeat("a", size-len(head)-2) + `"}`
+	}
+	over, at := padded(bound+1), padded(bound)
+	require.Len(t, over, bound+1)
+	require.Len(t, at, bound)
+	status, out, _ := send(t, "POST", "/api/v1/operations", over, nil)
+	require.Equal(t, 400, status, "%v", out)
+	require.Equal(t, "INVALID_ARGUMENT", errorCode(out))
+	require.Equal(t, "body exceeds the size bound", errorMessage(out))
+	status, out, _ = send(t, "POST", "/api/v1/operations", at, nil)
+	require.Equal(t, 400, status, "%v", out)
+	require.Equal(t, "request body: a member the contract does not define", errorMessage(out), "a body of exactly the bound is read and validated")
+
 	// What the rules admit: the uint64 maximum, an identity coding, a valid
 	// surrogate pair and an escaped BMP character reach the handler or the
 	// schema, never the Unicode or coding refusal.
 	// (The fake Control knows no op_1: the handler answers NOT_FOUND.)
-	status, out, _ := send(t, "POST", "/api/v1/operations/op_1/commands", command("18446744073709551615"), nil)
+	status, out, _ = send(t, "POST", "/api/v1/operations/op_1/commands", command("18446744073709551615"), nil)
 	require.Equal(t, 404, status, "the uint64 maximum is a revision, so the handler is reached: %v", out)
 	require.Equal(t, "NOT_FOUND", errorCode(out))
 	status, out, _ = send(t, "POST", "/api/v1/operations/op_1/commands", command("3"), map[string]string{"Content-Encoding": "identity"})
