@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,13 +23,23 @@ import (
 
 var sequencePattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
 
-// The canonical-sequence rule of contracts.md §4 is registered once on
-// Gin's validator so the cursor parameters bind through ShouldBind* like
-// every other request value.
+// canonicalSequence is the canonical-sequence rule of contracts.md §4: an
+// unsigned decimal string without leading zeros, bounded by uint64. The
+// pattern alone admits 20-digit values above the bound (RB-A23).
+func canonicalSequence(s string) bool {
+	if !sequencePattern.MatchString(s) {
+		return false
+	}
+	_, err := strconv.ParseUint(s, 10, 64)
+	return err == nil
+}
+
+// The canonical-sequence rule is registered once on Gin's validator so the
+// cursor parameters bind through ShouldBind* like every other request value.
 func init() {
 	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
 		_ = v.RegisterValidation("sequence", func(fl validator.FieldLevel) bool {
-			return sequencePattern.MatchString(fl.Field().String())
+			return canonicalSequence(fl.Field().String())
 		})
 	}
 }

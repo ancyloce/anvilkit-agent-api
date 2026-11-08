@@ -14,9 +14,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
@@ -140,6 +142,16 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 		log.Error("panic recovered", "requestId", requestIDOf(c), "panic", fmt.Sprintf("%T", recovered), "route", c.FullPath())
 		fail(c, &apiError{status: http.StatusServiceUnavailable, code: "DEPENDENCY_UNAVAILABLE", message: "internal failure", retryable: true})
 	}))
+
+	// RB-A23: a path or method no route serves is answered with the envelope,
+	// not Gin's plain-text 404 page.
+	engine.HandleMethodNotAllowed = true
+	engine.NoRoute(func(c *gin.Context) {
+		fail(c, &apiError{status: http.StatusNotFound, code: "NOT_FOUND", message: "no route serves this path"})
+	})
+	engine.NoMethod(func(c *gin.Context) {
+		fail(c, &apiError{status: http.StatusMethodNotAllowed, code: "INVALID_ARGUMENT", message: "this route does not serve the method"})
+	})
 
 	engine.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	engine.GET("/readyz", func(c *gin.Context) {
@@ -282,12 +294,18 @@ func authenticate(v application.Verifier) gin.HandlerFunc {
 	}
 }
 
-// strictBody bounds the body, rejects duplicate members, trailing values and
-// non-finite numbers before validation, and records the canonical digest
-// used as the command's request digest (contracts.md §4). kin-openapi does
-// not enforce these rules, so this thin adapter stays.
+// strictBody bounds the body, rejects duplicate members, trailing values,
+// non-finite numbers and invalid Unicode before validation, and records the
+// canonical digest used as the command's request digest (contracts.md §4).
+// kin-openapi does not enforce these rules, so this thin adapter stays. The
+// API accepts no compressed body (RB-S14): a Content-Encoding other than
+// identity is 415, whether or not a body follows.
 func strictBody(limit int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !identityEncoding(c.Request.Header.Values("Content-Encoding")) {
+			fail(c, &apiError{status: http.StatusUnsupportedMediaType, code: "INVALID_ARGUMENT", message: "compressed request bodies are not accepted"})
+			return
+		}
 		if c.Request.Body == nil || c.Request.ContentLength == 0 {
 			c.Next()
 			return
@@ -299,6 +317,13 @@ func strictBody(limit int64) gin.HandlerFunc {
 		}
 		if int64(len(raw)) > limit {
 			fail(c, invalidArgument("body exceeds the size bound"))
+			return
+		}
+		// encoding/json replaces invalid UTF-8 and unpaired surrogate escapes
+		// with U+FFFD without an error (RB-A23): the request would be digested
+		// and forwarded as other text than the client sent.
+		if !utf8.Valid(raw) || loneSurrogate(raw) {
+			fail(c, invalidArgument("invalid JSON: the body is not valid Unicode"))
 			return
 		}
 		decoded, err := strictDecode(raw)
@@ -315,6 +340,62 @@ func strictBody(limit int64) gin.HandlerFunc {
 		c.Request.Body = io.NopCloser(bytes.NewReader(raw))
 		c.Next()
 	}
+}
+
+// identityEncoding reports whether the Content-Encoding values (none, or
+// each identity) leave the body as sent.
+func identityEncoding(values []string) bool {
+	for _, v := range values {
+		for _, coding := range strings.Split(v, ",") {
+			if c := strings.TrimSpace(coding); c != "" && !strings.EqualFold(c, "identity") {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// loneSurrogate reports a \u escape of a UTF-16 surrogate that is not one
+// half of a high-low pair. A malformed escape is left to the decoder, which
+// refuses it.
+func loneSurrogate(raw []byte) bool {
+	in := false
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case !in:
+			in = c == '"'
+		case c == '"':
+			in = false
+		case c == '\\' && i+1 < len(raw) && raw[i+1] == 'u':
+			r, ok := escapedUnit(raw, i)
+			if !ok {
+				return false
+			}
+			i += 5 // the escape's last byte
+			switch {
+			case r >= 0xDC00 && r <= 0xDFFF:
+				return true
+			case r >= 0xD800 && r <= 0xDBFF:
+				low, ok := escapedUnit(raw, i+1)
+				if !ok || low < 0xDC00 || low > 0xDFFF {
+					return true
+				}
+				i += 6
+			}
+		case c == '\\':
+			i++ // a two-byte escape
+		}
+	}
+	return false
+}
+
+// escapedUnit reads the UTF-16 code unit of the \uXXXX escape at raw[i:].
+func escapedUnit(raw []byte, i int) (rune, bool) {
+	if i < 0 || i+6 > len(raw) || raw[i] != '\\' || raw[i+1] != 'u' {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(string(raw[i+2:i+6]), 16, 16)
+	return rune(v), err == nil
 }
 
 // errDuplicateMember names no member: the key is client input (RB-S13).
