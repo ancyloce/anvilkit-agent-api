@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"github.com/ancyloce/anvilkit-agent-api/internal/requestid"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -168,6 +170,31 @@ func toReceipt(r *controlv1.CommandReceipt) application.CommandReceipt {
 // mapErr turns a gRPC status into the public error code (contracts.md §4).
 func mapErr(err error) error { return MapError(err, "control") }
 
+// conflictRevisions reads the expected and current revision of a Control
+// revision conflict from its google.rpc.ErrorInfo detail (RB-A23: Control's
+// reason and domain only, both values canonical uint64 decimals); anything
+// else leaves both empty, and the envelope then carries no revisions.
+func conflictRevisions(st *status.Status) (expected, current string) {
+	for _, d := range st.Details() {
+		ei, ok := d.(*errdetails.ErrorInfo)
+		if !ok || ei.GetReason() != "REVISION_CONFLICT" || ei.GetDomain() != "anvilkit.control.v1" {
+			continue
+		}
+		e, c := ei.GetMetadata()["expectedRevision"], ei.GetMetadata()["currentRevision"]
+		if canonicalRevision(e) && canonicalRevision(c) {
+			return e, c
+		}
+	}
+	return "", ""
+}
+
+// canonicalRevision is contracts.md §4's canonical sequence: a uint64 in
+// decimal with no sign and no leading zero.
+func canonicalRevision(s string) bool {
+	v, err := strconv.ParseUint(s, 10, 64)
+	return err == nil && strconv.FormatUint(v, 10) == s
+}
+
 // publicConflicts are the precondition codes of the public error contract.
 var publicConflicts = map[string]bool{
 	"REVISION_CONFLICT": true, "IDEMPOTENCY_CONFLICT": true, "STALE_EXECUTION": true, "PROFILE_UNQUALIFIED": true,
@@ -211,7 +238,11 @@ func MapError(err error, service string) error {
 		if !publicConflicts[code] {
 			code = "REVISION_CONFLICT"
 		}
-		return &application.ControlError{Code: code, Message: st.Message(), Retryable: false}
+		ce := &application.ControlError{Code: code, Message: st.Message(), Retryable: false}
+		if code == "REVISION_CONFLICT" && service == "control" {
+			ce.ExpectedRevision, ce.CurrentRevision = conflictRevisions(st)
+		}
+		return ce
 	case codes.PermissionDenied, codes.Unauthenticated:
 		return &application.ControlError{Code: "FORBIDDEN", Message: st.Message(), Retryable: false}
 	case codes.AlreadyExists:
