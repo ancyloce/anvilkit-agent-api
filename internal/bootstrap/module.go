@@ -116,7 +116,7 @@ func newGateways(lc fx.Lifecycle, cfg config.Config, ids *identities, log *slog.
 // run binds the listener inside OnStart, so Fx reports a failed bind as a
 // failed start, and turns a listener that stops on its own into a shutdown
 // with a non-zero exit instead of a process that keeps running unreachable.
-func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptransport.Server, ctl *control.Client, ready *readiness, log *slog.Logger) {
+func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptransport.Server, ctl *control.Client, ready *readiness, metrics *httptransport.Metrics, log *slog.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			addr, err := srv.Start()
@@ -135,10 +135,16 @@ func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptranspor
 		OnStop: func(ctx context.Context) error {
 			// Readiness goes first (P1.4): the endpoint leaves the Service before
 			// the drain starts.
+			begin := time.Now()
 			ready.stop()
 			shutdown, cancel := context.WithTimeout(ctx, cfg.HTTP.ShutdownTimeout)
 			defer cancel()
-			err := srv.Stop(shutdown)
+			forced, err := srv.Stop(shutdown)
+			metrics.Stopped(time.Since(begin), forced)
+			if forced {
+				log.Warn("api drain bound reached: open connections closed", "drainSeconds", time.Since(begin).Seconds())
+			}
+			log.Info("api stopped", "drainSeconds", time.Since(begin).Seconds(), "forced", forced)
 			_ = ctl.Close()
 			return err
 		},
