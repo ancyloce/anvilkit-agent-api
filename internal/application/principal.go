@@ -225,11 +225,15 @@ type TransferView struct {
 	Upload         *UploadCapability
 }
 
-// ControlError carries the public error code decided by Control.
+// ControlError carries the public error code decided by Control. A revision
+// conflict whose revisions Control reported also carries them (canonical
+// decimal sequences; empty when unknown), for the envelope's details (RB-A23).
 type ControlError struct {
-	Code      string
-	Message   string
-	Retryable bool
+	Code             string
+	Message          string
+	Retryable        bool
+	ExpectedRevision string
+	CurrentRevision  string
 }
 
 func (e *ControlError) Error() string { return e.Code + ": " + e.Message }
