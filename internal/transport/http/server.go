@@ -224,14 +224,22 @@ func (s *Server) Served() <-chan error { return s.served }
 
 // Stop ends every open event stream with its end frame, then drains the
 // listener within ctx (P1.7). A drain that outlives ctx is forced (DD-09 §3,
-// RB-A25): the connections still open are closed, and Stop reports it.
+// RB-A25, DEC-049): the connections still open are closed, Stop reports it
+// and the stop completes normally. Only the drain bound forces: any other
+// shutdown error (the listener's close, the forced close's own) is returned.
 func (s *Server) Stop(ctx context.Context) (forced bool, err error) {
 	s.drainOnce.Do(func() { close(s.draining) })
 	err = s.http.Shutdown(ctx)
-	if err != nil && ctx.Err() != nil {
+	if drainBoundReached(ctx, err) {
 		return true, s.http.Close()
 	}
 	return false, err
+}
+
+// drainBoundReached says whether a shutdown error is the drain bound itself
+// (ctx ended while connections were still open) and not another failure.
+func drainBoundReached(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err())
 }
 
 // ---- middleware ----

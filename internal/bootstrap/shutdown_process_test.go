@@ -50,14 +50,19 @@ func (operationsFake) StreamOperationEvents(_ *controlv1.StreamOperationEventsRe
 	return s.Context().Err()
 }
 
-// TestProcessDrainsOpenStreamsAndExitsZero is P1.7 AC3: the API process,
-// terminated with three event streams open, withdraws readiness, ends
-// every stream with a final `end` event, completes within its configured
-// drain, flushes its traces to the collector and exits 0.
-func TestProcessDrainsOpenStreamsAndExitsZero(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds and runs the API binary")
-	}
+// apiProcess is the built API binary, ready, in front of a fake Control and
+// a trace collector.
+type apiProcess struct {
+	base, token string
+	proc        *exec.Cmd
+	logs        *bytes.Buffer
+	collector   *traceCollector
+}
+
+// startAPI builds the API, starts it with drain as http.shutdown_timeout
+// against ctl and returns once /readyz answers.
+func startAPI(t *testing.T, ctl controlv1.OperationServiceServer, drain time.Duration) *apiProcess {
+	t.Helper()
 	listen := func() net.Listener {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -65,18 +70,18 @@ func TestProcessDrainsOpenStreamsAndExitsZero(t *testing.T) {
 	}
 	controlLis := listen()
 	gs := grpc.NewServer()
-	controlv1.RegisterOperationServiceServer(gs, operationsFake{})
+	controlv1.RegisterOperationServiceServer(gs, ctl)
 	hs := health.NewServer()
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 	grpc_health_v1.RegisterHealthServer(gs, hs)
 	go func() { _ = gs.Serve(controlLis) }()
-	defer gs.Stop()
+	t.Cleanup(gs.Stop)
 	collectorLis := listen()
 	cs := grpc.NewServer()
 	collector := &traceCollector{}
 	coltracepb.RegisterTraceServiceServer(cs, collector)
 	go func() { _ = cs.Serve(collectorLis) }()
-	defer cs.Stop()
+	t.Cleanup(cs.Stop)
 	apiLis := listen()
 	apiAddr := apiLis.Addr().String()
 	require.NoError(t, apiLis.Close())
@@ -90,7 +95,6 @@ func TestProcessDrainsOpenStreamsAndExitsZero(t *testing.T) {
 	require.NoError(t, err, "%s", out)
 	const token = "token-drain-0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "principals.json"), []byte(fmt.Sprintf(`{%q:{"tenantId":"tenant_a","projectId":"proj_a","actorId":"user_a","roles":["operator"]}}`, token)), 0o600))
-	const drain = 5 * time.Second
 	cfg := fmt.Sprintf(`development:
   enabled: true
 http:
@@ -110,12 +114,12 @@ telemetry:
     mode: development
 `, apiAddr, drain, controlLis.Addr(), filepath.Join(dir, "principals.json"), collectorLis.Addr())
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o600))
-	var logs bytes.Buffer
+	logs := &bytes.Buffer{}
 	proc := exec.Command(bin)
 	proc.Env = append(withoutAmbientConfig(os.Environ()), "ANVILKIT_API_CONFIG="+filepath.Join(dir, "config.yaml"))
-	proc.Stdout, proc.Stderr = &logs, &logs
+	proc.Stdout, proc.Stderr = logs, logs
 	require.NoError(t, proc.Start())
-	defer func() { _ = proc.Process.Kill() }()
+	t.Cleanup(func() { _ = proc.Process.Kill() })
 	base := "http://" + apiAddr
 	require.Eventually(t, func() bool {
 		resp, err := http.Get(base + "/readyz")
@@ -124,7 +128,22 @@ telemetry:
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusNoContent
-	}, 30*time.Second, 100*time.Millisecond, "the API is ready: %s", &logs)
+	}, 30*time.Second, 100*time.Millisecond, "the API is ready: %s", logs)
+
+	return &apiProcess{base: base, token: token, proc: proc, logs: logs, collector: collector}
+}
+
+// TestProcessDrainsOpenStreamsAndExitsZero is P1.7 AC3: the API process,
+// terminated with three event streams open, withdraws readiness, ends
+// every stream with a final `end` event, completes within its configured
+// drain, flushes its traces to the collector and exits 0.
+func TestProcessDrainsOpenStreamsAndExitsZero(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the API binary")
+	}
+	const drain = 5 * time.Second
+	api := startAPI(t, operationsFake{}, drain)
+	base, token, proc, logs, collector := api.base, api.token, api.proc, api.logs, api.collector
 
 	bodies := make([]chan string, 3)
 	for i := range bodies {
@@ -133,7 +152,7 @@ telemetry:
 		req.Header.Set("Authorization", "Bearer "+token)
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
-		require.Equal(t, 200, resp.StatusCode, "%s", &logs)
+		require.Equal(t, 200, resp.StatusCode, "%s", logs)
 		r := bufio.NewReader(resp.Body)
 		line, err := r.ReadString('\n')
 		require.NoError(t, err)
@@ -153,11 +172,11 @@ telemetry:
 	case err := <-waited:
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			t.Fatalf("the API exited %d: %s", exit.ExitCode(), &logs)
+			t.Fatalf("the API exited %d: %s", exit.ExitCode(), logs)
 		}
 		require.NoError(t, err)
 	case <-time.After(drain + 10*time.Second):
-		t.Fatalf("the API did not stop: %s", &logs)
+		t.Fatalf("the API did not stop: %s", logs)
 	}
 	took := time.Since(started)
 	require.Less(t, took, drain, "the stop completes within the configured drain")
@@ -186,4 +205,89 @@ func withoutAmbientConfig(env []string) []string {
 		}
 	}
 	return out
+}
+
+// stuckControl holds GetOperation until the caller gives up: a request the
+// drain cannot finish.
+type stuckControl struct {
+	operationsFake
+	arrived chan struct{}
+}
+
+func (s stuckControl) GetOperation(ctx context.Context, _ *controlv1.GetOperationRequest) (*controlv1.GetOperationResponse, error) {
+	select {
+	case s.arrived <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestProcessForcesAStuckRequestAndExitsZero (RB-A25, DEC-049): the API
+// process, terminated while a request is still inside a handler, waits its
+// drain bound, closes the connection the drain left open, records the forced
+// stop in its log and completes the stop normally (exit 0, no stop error).
+func TestProcessForcesAStuckRequestAndExitsZero(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the API binary")
+	}
+	const drain = time.Second // the shortest http.shutdown_timeout the loader accepts
+	ctl := stuckControl{arrived: make(chan struct{}, 1)}
+	api := startAPI(t, ctl, drain)
+
+	answered := make(chan error, 1)
+	go func() {
+		req, err := http.NewRequest("GET", api.base+"/api/v1/operations/op_stuck", nil)
+		if err != nil {
+			answered <- err
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+api.token)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err == nil {
+				err = fmt.Errorf("answered %d", resp.StatusCode)
+			}
+		}
+		answered <- err
+	}()
+	select {
+	case <-ctl.arrived:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the request never reached Control: %s", api.logs)
+	}
+
+	started := time.Now()
+	require.NoError(t, api.proc.Process.Signal(syscall.SIGTERM))
+	waited := make(chan error, 1)
+	go func() { waited <- api.proc.Wait() }()
+	select {
+	case err := <-waited:
+		require.NoError(t, err, "a forced stop is a normal exit: %s", api.logs)
+	case <-time.After(drain + 15*time.Second):
+		t.Fatalf("the API did not stop: %s", api.logs)
+	}
+	took := time.Since(started)
+	require.Equal(t, 0, api.proc.ProcessState.ExitCode())
+	require.GreaterOrEqual(t, took, drain, "the stuck request was given the whole drain bound")
+	select {
+	case err := <-answered:
+		require.Error(t, err, "the client sees its connection closed, never an answer")
+		require.NotContains(t, err.Error(), "answered ", "%s", api.logs)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stuck request's connection was not closed")
+	}
+	out := api.logs.String()
+	require.Contains(t, out, `"msg":"api drain bound reached: open connections closed"`, "the forced close is recorded")
+	var stopped string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, `"msg":"api stopped"`) {
+			stopped = line
+		}
+	}
+	require.Contains(t, stopped, `"forced":true`, "the stop line carries the forced stop: %s", out)
+	require.NotContains(t, out, `"msg":"api stop failed"`, "a forced close is no failed stop")
+	t.Logf("DEC-049: SIGTERM with a request stuck in its handler: connection closed after the %s drain bound, stopped in %s, exit 0, forced stop logged", drain, took.Round(time.Millisecond))
 }

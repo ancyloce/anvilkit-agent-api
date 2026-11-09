@@ -141,11 +141,19 @@ func run(lc fx.Lifecycle, sd fx.Shutdowner, cfg config.Config, srv *httptranspor
 			defer cancel()
 			forced, err := srv.Stop(shutdown)
 			metrics.Stopped(time.Since(begin), forced)
+			// DEC-049: a forced close ends the stop normally and is recorded
+			// here; the gauge lives only until the process exits, so the log
+			// line is the durable record (and the Compose placement's signal).
 			if forced {
-				log.Warn("api drain bound reached: open connections closed", "drainSeconds", time.Since(begin).Seconds())
+				log.Warn("api drain bound reached: open connections closed", "drainSeconds", time.Since(begin).Seconds(), "shutdownTimeout", cfg.HTTP.ShutdownTimeout.String())
+			}
+			if err != nil {
+				log.Error("api stop failed", "error", err, "forced", forced)
 			}
 			log.Info("api stopped", "drainSeconds", time.Since(begin).Seconds(), "forced", forced)
-			_ = ctl.Close()
+			if cerr := ctl.Close(); cerr != nil {
+				log.Warn("api control client close failed", "error", cerr)
+			}
 			return err
 		},
 	})
