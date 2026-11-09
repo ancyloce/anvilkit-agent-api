@@ -223,10 +223,15 @@ func (s *Server) Start() (net.Addr, error) {
 func (s *Server) Served() <-chan error { return s.served }
 
 // Stop ends every open event stream with its end frame, then drains the
-// listener within ctx (P1.7).
-func (s *Server) Stop(ctx context.Context) error {
+// listener within ctx (P1.7). A drain that outlives ctx is forced (DD-09 §3,
+// RB-A25): the connections still open are closed, and Stop reports it.
+func (s *Server) Stop(ctx context.Context) (forced bool, err error) {
 	s.drainOnce.Do(func() { close(s.draining) })
-	return s.http.Shutdown(ctx)
+	err = s.http.Shutdown(ctx)
+	if err != nil && ctx.Err() != nil {
+		return true, s.http.Close()
+	}
+	return false, err
 }
 
 // ---- middleware ----

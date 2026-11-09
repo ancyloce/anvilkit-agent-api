@@ -60,7 +60,9 @@ func TestShutdownEndsOpenStreams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), drain)
 	defer cancel()
 	started := time.Now()
-	require.NoError(t, srv.Stop(ctx), "a clean drain")
+	forced, err := srv.Stop(ctx)
+	require.NoError(t, err, "a clean drain")
+	require.False(t, forced)
 	took := time.Since(started)
 	require.Less(t, took, 2*time.Second, "the drain does not wait for its bound")
 	for i, b := range bodies {

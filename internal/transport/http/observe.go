@@ -19,6 +19,11 @@ import (
 type Metrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
+	// The DD-09 §6 lifecycle signals (RB-A25), named as Knowledge and MCP
+	// name theirs: the active configuration generation (one per process; a
+	// rejected candidate never starts), the last stop's drain time and
+	// whether it had to close connections the drain left open.
+	drain, forced prometheus.Gauge
 }
 
 // NewMetrics registers the request metrics on reg.
@@ -29,8 +34,24 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "anvilkit_api_request_duration_seconds", Help: "HTTP request duration by method and route template.",
 			Buckets: prometheus.ExponentialBuckets(0.005, 2, 14)}, []string{"method", "route"}),
 	}
-	reg.MustRegister(m.requests, m.duration)
+	generation := prometheus.NewGauge(prometheus.GaugeOpts{Name: "anvilkit_api_config_generation", Help: "Number of the active configuration generation (one per process: a changed input takes effect through a rolling restart)."})
+	m.drain = prometheus.NewGauge(prometheus.GaugeOpts{Name: "anvilkit_api_shutdown_drain_seconds", Help: "Seconds the last shutdown spent draining before dependencies closed."})
+	m.forced = prometheus.NewGauge(prometheus.GaugeOpts{Name: "anvilkit_api_shutdown_forced", Help: "1 when the last shutdown had to close connections the drain left open."})
+	generation.Set(1)
+	reg.MustRegister(m.requests, m.duration, generation, m.drain, m.forced)
 	return m
+}
+
+// Stopped records a shutdown's drain time and whether it was forced. A nil
+// Metrics records nothing.
+func (m *Metrics) Stopped(drain time.Duration, forced bool) {
+	if m == nil {
+		return
+	}
+	m.drain.Set(drain.Seconds())
+	if forced {
+		m.forced.Set(1)
+	}
 }
 
 // observe gives every request one server span and its metrics with

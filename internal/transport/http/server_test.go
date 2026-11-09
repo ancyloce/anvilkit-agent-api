@@ -679,7 +679,8 @@ func TestStartBindsTheListenerBeforeReportingStarted(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	require.NoError(t, srv.Stop(ctx))
+	_, err = srv.Stop(ctx)
+	require.NoError(t, err)
 	select {
 	case err := <-srv.Served():
 		require.NoError(t, err, "a listener closed by Stop is not a failure")
