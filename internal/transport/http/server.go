@@ -497,6 +497,9 @@ type apiError struct {
 	message   string
 	retryable bool
 	field     string // details.field: where a request was refused (RB-S13); never client input
+	// details.expectedRevision and details.currentRevision of a revision
+	// conflict Control reported both revisions of (RB-A23); empty otherwise.
+	expectedRevision, currentRevision string
 }
 
 func (e *apiError) Error() string { return e.code + ": " + e.message }
@@ -541,6 +544,13 @@ func errorEnvelope() gin.HandlerFunc {
 			field := truncate(ae.field, 128)
 			d = &details{Field: &field}
 		}
+		if ae.expectedRevision != "" && ae.currentRevision != "" {
+			if d == nil {
+				d = &details{}
+			}
+			expected, current := ae.expectedRevision, ae.currentRevision
+			d.ExpectedRevision, d.CurrentRevision = &expected, &current
+		}
 		c.JSON(ae.status, agentapi.ErrorEnvelope{Error: struct {
 			Code      agentapi.ErrorCode `json:"code"`
 			Details   *details           `json:"details,omitempty"`
@@ -575,7 +585,11 @@ func fromControl(err error) *apiError {
 		}
 		// No wait resolves these codes: never retryable, whatever the adapter
 		// said, so they get no Retry-After either (RB-A24, RB-A16).
-		return &apiError{status: status, code: ce.Code, message: ce.Message, retryable: ce.Retryable && !neverRetryable[ce.Code]}
+		ae := &apiError{status: status, code: ce.Code, message: ce.Message, retryable: ce.Retryable && !neverRetryable[ce.Code]}
+		if ce.Code == "REVISION_CONFLICT" {
+			ae.expectedRevision, ae.currentRevision = ce.ExpectedRevision, ce.CurrentRevision
+		}
+		return ae
 	}
 	if errors.Is(err, application.ErrForbidden) {
 		return &apiError{status: http.StatusForbidden, code: "FORBIDDEN", message: "not permitted"}
