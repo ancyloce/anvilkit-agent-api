@@ -17,7 +17,7 @@ This repository holds the replacement implementation (Gin, oapi-codegen strict s
 | `internal/adapters/knowledge`, `internal/adapters/mcp` | gRPC gateways to the Knowledge owner (SourceService, SnapshotService, RetrievalService, MemoryService) and the MCP owner (CatalogService, GrantService, CallService) under the principal's scope and command identity |
 | `internal/adapters/oidcauth` | The OpenID Connect verifier (`auth.mode: oidc`): bearer JWTs checked against the issuer's discovered JWKS, audience, algorithm allowlist and clock skew, claims mapped to tenant, project, actor and roles |
 | `internal/adapters/fixtureauth` | DEVELOPMENT_ONLY bearer-token principals file (`auth.mode: fixture`), admitted only with `development.enabled` |
-| `internal/transport/identity` | The workload identity of the gRPC clients: rotating mTLS credentials from mounted certificate files and the peers' SPIFFE IDs |
+| `internal/transport/identity` | The workload identity of the gRPC clients: rotating mTLS credentials from mounted certificate files, verifying each server by its reviewed name |
 | `internal/requestid` | The request identifier carried inward as gRPC metadata |
 | `deploy/chart` | The service's Helm chart (Deployment, Service, ServiceAccount, ConfigMap, PodDisruptionBudget, the cert-manager workload `Certificate`, an optional HorizontalPodAutoscaler) |
 | `Dockerfile`, `.dockerignore` | Image build from this repository root alone |

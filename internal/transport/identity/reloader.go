@@ -2,7 +2,6 @@ package identity
 
 import (
 	"context"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -144,15 +143,4 @@ func retired(previous, current *Material) int {
 		}
 	}
 	return n
-}
-
-// RetiredRoots lists the previous roots a reload dropped.
-func RetiredRoots(previous, current *Material) []*x509.Certificate {
-	var out []*x509.Certificate
-	for fp, c := range previous.Roots {
-		if _, ok := current.Roots[fp]; !ok {
-			out = append(out, c)
-		}
-	}
-	return out
 }

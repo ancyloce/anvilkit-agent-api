@@ -126,15 +126,6 @@ func (ids *identities) collectorCredentials(name string, t config.ClientTLS) (cr
 	return nil, fmt.Errorf("%s: unknown mode %q", name, t.Mode)
 }
 
-// collector is collectorCredentials as a gRPC dial option.
-func (ids *identities) collector(name string, t config.ClientTLS) (grpc.DialOption, error) {
-	c, err := ids.collectorCredentials(name, t)
-	if err != nil {
-		return nil, err
-	}
-	return grpc.WithTransportCredentials(c), nil
-}
-
 func caPool(path string) (*x509.CertPool, error) {
 	pemBytes, err := os.ReadFile(path)
 	if err != nil {
