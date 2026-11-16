@@ -117,6 +117,10 @@ type PreparationIntake struct {
 	PromptDigest     string
 	BrandReferences  []SourceReference
 	AssetReferences  []SourceReference
+	// BaseOperationID and BaseRevision name the delivered component a
+	// preparation analyzes a change of (DEC-063); both empty for a new one.
+	BaseOperationID string
+	BaseRevision    string
 }
 
 type SourceReference struct {
@@ -292,7 +296,9 @@ type OperationSubject struct {
 	SourceRevision string
 	SourceHandle   string
 	// SourceOperationID and PackageVersion bind a release (P21); Control
-	// binds the released source artifact itself.
+	// binds the released source artifact itself. SourceOperationID and
+	// SourceRevision also name the base of a refinement and of the
+	// preparation that analyzes it (DEC-062, DEC-063).
 	SourceOperationID string
 	PackageVersion    string
 }
