@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ancyloce/anvilkit-agent-api/internal/application"
 )
 
 // API-01 and API-06 over the strict transport: the prompt binding and the
@@ -12,7 +14,7 @@ import (
 // the open question set, an answer is bound to the question set revision
 // and a stale revision is a public REVISION_CONFLICT.
 func TestPreparationEndpoints(t *testing.T) {
-	ts, _ := newServer(t)
+	ts, control := newServer(t)
 	tokenA := "token-tenant-a-0123456789"
 	digest := "sha256:0dc7fa9db7237a2b5c96f70f59bb00f73bb86a0ca5554e91c312f9ada26e18b3"
 
@@ -37,6 +39,34 @@ func TestPreparationEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, status)
 	status, out, _ = do(t, ts, "POST", "/api/v1/preparations", tokenA, `{"commandId":"p3","prompt":{"transferId":"xfer_prompt","digest":"`+digest+`"},"tenantId":"tenant_b"}`)
 	require.Equal(t, http.StatusBadRequest, status, "an unknown member is refused")
+
+	// DEC-063: a preparation of a change names its base, which reaches
+	// Control in the subject and is part of the intake's digest.
+	prepare := func(commandID, base string) (int, map[string]any) {
+		status, out, _ := do(t, ts, "POST", "/api/v1/preparations", tokenA, `{"commandId":"`+commandID+`","prompt":{"transferId":"xfer_prompt","digest":"`+digest+`"}`+base+`}`)
+		return status, out
+	}
+	status, plain := prepare("p4", "")
+	require.Equal(t, http.StatusAccepted, status, plain)
+	status, based := prepare("p5", `,"refinementBase":{"sourceOperationId":"op_base","sourceRevision":"4"}`)
+	require.Equal(t, http.StatusAccepted, status, based)
+	control.mu.Lock()
+	sent := append([]application.OperationSubject(nil), control.subjects[len(control.subjects)-2:]...)
+	control.mu.Unlock()
+	require.Empty(t, sent[0].SourceOperationID, "a preparation of a new component names no base")
+	require.Empty(t, sent[0].SourceRevision)
+	require.Equal(t, "op_base", sent[1].SourceOperationID)
+	require.Equal(t, "4", sent[1].SourceRevision)
+	require.NotEqual(t, sent[0].SubjectDigest, sent[1].SubjectDigest, "the base is part of the intake")
+	for name, base := range map[string]string{
+		"no revision":       `,"refinementBase":{"sourceOperationId":"op_base"}`,
+		"no operation":      `,"refinementBase":{"sourceRevision":"4"}`,
+		"a chosen artifact": `,"refinementBase":{"sourceOperationId":"op_base","sourceRevision":"4","sourceHandle":"hdl_1"}`,
+		"not a revision":    `,"refinementBase":{"sourceOperationId":"op_base","sourceRevision":"latest"}`,
+	} {
+		status, _ := prepare("p6", base)
+		require.Equal(t, http.StatusBadRequest, status, name)
+	}
 
 	status, out, _ = do(t, ts, "POST", "/api/v1/preparations/"+operationID+"/answers", tokenA, `{"commandId":"a1","questionSetId":"qs_p1","questionSetRevision":"2","answer":{"transferId":"xfer_ans","digest":"`+digest+`"}}`)
 	require.Equal(t, http.StatusConflict, status)

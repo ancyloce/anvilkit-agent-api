@@ -158,7 +158,9 @@ func deref(s *string) string {
 // references into a Preparation: the subject digest is the canonical
 // digest of the intake (the same intake under another command is the
 // same subject; Control deduplicates the command), the profile is the
-// reviewed preparation profile of this deployment.
+// reviewed preparation profile of this deployment. A refinement base
+// (DEC-063) is part of the intake and of its digest; an intake without one
+// keeps the digest it always had.
 func (h *strictHandlers) CreatePreparation(ctx context.Context, req agentapi.CreatePreparationRequestObject) (agentapi.CreatePreparationResponseObject, error) {
 	cmd, p := identity(ctx, req.Body.CommandId)
 	intake := application.PreparationIntake{PromptTransferID: req.Body.Prompt.TransferId, PromptDigest: req.Body.Prompt.Digest}
@@ -172,7 +174,12 @@ func (h *strictHandlers) CreatePreparation(ctx context.Context, req agentapi.Cre
 			intake.AssetReferences = append(intake.AssetReferences, application.SourceReference{SourceID: r.SourceId, Revision: r.Revision})
 		}
 	}
-	subject, err := application.CanonicalDigest(map[string]any{"prompt": req.Body.Prompt, "brandReferences": req.Body.BrandReferences, "assetReferences": req.Body.AssetReferences})
+	canonical := map[string]any{"prompt": req.Body.Prompt, "brandReferences": req.Body.BrandReferences, "assetReferences": req.Body.AssetReferences}
+	if base := req.Body.RefinementBase; base != nil {
+		intake.BaseOperationID, intake.BaseRevision = base.SourceOperationId, base.SourceRevision
+		canonical["refinementBase"] = base
+	}
+	subject, err := application.CanonicalDigest(canonical)
 	if err != nil {
 		return nil, err
 	}

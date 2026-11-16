@@ -110,7 +110,8 @@ func (f *fakeControl) CreateOperation(_ context.Context, cmd application.Command
 // projection carries an open question set, so the public clarification
 // projection and API-06 are exercised over the fake.
 func (f *fakeControl) CreatePreparation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, profileID, subjectDigest string, intake application.PreparationIntake) (application.OperationView, error) {
-	view, err := f.CreateOperation(ctx, cmd, p, "preparation", application.OperationSubject{ProfileID: profileID, SubjectDigest: subjectDigest})
+	view, err := f.CreateOperation(ctx, cmd, p, "preparation", application.OperationSubject{ProfileID: profileID, SubjectDigest: subjectDigest,
+		SourceOperationID: intake.BaseOperationID, SourceRevision: intake.BaseRevision})
 	if err != nil {
 		return view, err
 	}
