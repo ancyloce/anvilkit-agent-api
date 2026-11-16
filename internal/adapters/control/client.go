@@ -132,9 +132,15 @@ func (c *Client) CreatePreparation(ctx context.Context, cmd application.CommandI
 	for _, r := range intake.AssetReferences {
 		prep.AssetReferences = append(prep.AssetReferences, &controlv1.SourceReference{SourceId: r.SourceID, Revision: r.Revision})
 	}
+	subject := &controlv1.OperationSubject{ProfileId: profileID, SubjectDigest: subjectDigest}
+	if intake.BaseOperationID != "" {
+		// DEC-063: the preparation's subject names its base, as a
+		// refinement's and a release's name their source.
+		subject.SourceOperationId, subject.SourceRevision = &intake.BaseOperationID, &intake.BaseRevision
+	}
 	resp, err := c.ops.CreateOperation(ctx, &controlv1.CreateOperationRequest{
 		Command: command(cmd), Scope: scope(p), Kind: controlv1.OperationKind_OPERATION_KIND_PREPARATION,
-		Subject: &controlv1.OperationSubject{ProfileId: profileID, SubjectDigest: subjectDigest}, Preparation: prep,
+		Subject: subject, Preparation: prep,
 	})
 	if err != nil {
 		return application.OperationView{}, mapErr(err)
