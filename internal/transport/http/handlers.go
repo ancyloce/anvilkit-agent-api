@@ -58,11 +58,21 @@ func optStr(s string) *string {
 	return &s
 }
 
+// publicBase states a refinement base in the public subject; nil when the
+// operation names none.
+func publicBase(operationID, revision string) *agentapi.RefinementBase {
+	if operationID == "" && revision == "" {
+		return nil
+	}
+	return &agentapi.RefinementBase{SourceOperationId: operationID, SourceRevision: revision}
+}
+
 func viewToPublic(v application.OperationView) agentapi.OperationView {
 	out := agentapi.OperationView{
 		OperationId: v.OperationID, TenantId: v.TenantID, ActorId: v.ActorID, Kind: agentapi.OperationKind(v.Kind),
 		Subject: agentapi.OperationSubject{ProfileId: v.ProfileID, SubjectDigest: v.SubjectDigest, BriefId: optStr(v.BriefID), SourceRevision: optStr(v.SourceRevision),
-			SourceHandle: optStr(v.SourceHandle), SourceOperationId: optStr(v.SourceOperationID), PackageVersion: optStr(v.PackageVersion)},
+			SourceHandle: optStr(v.SourceHandle), SourceOperationId: optStr(v.SourceOperationID), PackageVersion: optStr(v.PackageVersion),
+			RefinementBase: publicBase(v.BaseOperationID, v.BaseRevision)},
 		Lifecycle: agentapi.Lifecycle(v.Lifecycle), Phase: v.Phase, Control: agentapi.ControlState(v.Control), Cleanup: agentapi.CleanupState(v.Cleanup),
 		Finance: agentapi.FinanceState(v.Finance), Revision: v.Revision, CoveredEventSeq: v.CoveredEventSeq, ExecutionEpoch: v.ExecutionEpoch,
 		CreatedAt: v.CreatedAt.UTC(), UpdatedAt: v.UpdatedAt.UTC(), Deadline: v.Deadline.UTC(), FailureCode: optStr(v.FailureCode), ProjectId: optStr(v.ProjectID),
@@ -112,10 +122,14 @@ func receiptToPublic(r application.CommandReceipt) agentapi.CommandReceipt {
 func (h *strictHandlers) CreateOperation(ctx context.Context, req agentapi.CreateOperationRequestObject) (agentapi.CreateOperationResponseObject, error) {
 	cmd, p := identity(ctx, req.Body.CommandId)
 	s := req.Body.Subject
-	view, err := h.control.CreateOperation(ctx, cmd, p, string(req.Body.Kind), application.OperationSubject{
+	subject := application.OperationSubject{
 		ProfileID: s.ProfileId, SubjectDigest: s.SubjectDigest, BriefID: deref(s.BriefId), SourceRevision: deref(s.SourceRevision), SourceHandle: deref(s.SourceHandle),
 		SourceOperationID: deref(s.SourceOperationId), PackageVersion: deref(s.PackageVersion),
-	})
+	}
+	if base := s.RefinementBase; base != nil {
+		subject.BaseOperationID, subject.BaseRevision = base.SourceOperationId, base.SourceRevision
+	}
+	view, err := h.control.CreateOperation(ctx, cmd, p, string(req.Body.Kind), subject)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +173,9 @@ func deref(s *string) string {
 // digest of the intake (the same intake under another command is the
 // same subject; Control deduplicates the command), the profile is the
 // reviewed preparation profile of this deployment. A refinement base
-// (DEC-063) is part of the intake and of its digest; an intake without one
-// keeps the digest it always had.
+// (DEC-063) is part of the intake and of its digest, and reaches Control as
+// the subject's refinement base; an intake without one keeps the digest it
+// always had.
 func (h *strictHandlers) CreatePreparation(ctx context.Context, req agentapi.CreatePreparationRequestObject) (agentapi.CreatePreparationResponseObject, error) {
 	cmd, p := identity(ctx, req.Body.CommandId)
 	intake := application.PreparationIntake{PromptTransferID: req.Body.Prompt.TransferId, PromptDigest: req.Body.Prompt.Digest}

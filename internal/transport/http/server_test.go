@@ -95,6 +95,7 @@ func (f *fakeControl) CreateOperation(_ context.Context, cmd application.Command
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	view := application.OperationView{
 		OperationID: "op_" + cmd.CommandID, TenantID: p.TenantID, ActorID: p.ActorID, Kind: kind, ProfileID: profileID, SubjectDigest: subjectDigest,
+		BaseOperationID: subject.BaseOperationID, BaseRevision: subject.BaseRevision,
 		Lifecycle: "accepted", Phase: "accepted", Control: "none", Cleanup: "not_required", Finance: "not_funded", Revision: "2", CoveredEventSeq: "2",
 		ExecutionEpoch: "1", CreatedAt: now, UpdatedAt: now, Deadline: now.Add(15 * time.Minute),
 	}
@@ -111,7 +112,7 @@ func (f *fakeControl) CreateOperation(_ context.Context, cmd application.Command
 // projection and API-06 are exercised over the fake.
 func (f *fakeControl) CreatePreparation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, profileID, subjectDigest string, intake application.PreparationIntake) (application.OperationView, error) {
 	view, err := f.CreateOperation(ctx, cmd, p, "preparation", application.OperationSubject{ProfileID: profileID, SubjectDigest: subjectDigest,
-		SourceOperationID: intake.BaseOperationID, SourceRevision: intake.BaseRevision})
+		BaseOperationID: intake.BaseOperationID, BaseRevision: intake.BaseRevision})
 	if err != nil {
 		return view, err
 	}

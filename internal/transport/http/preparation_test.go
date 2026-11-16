@@ -40,8 +40,9 @@ func TestPreparationEndpoints(t *testing.T) {
 	status, out, _ = do(t, ts, "POST", "/api/v1/preparations", tokenA, `{"commandId":"p3","prompt":{"transferId":"xfer_prompt","digest":"`+digest+`"},"tenantId":"tenant_b"}`)
 	require.Equal(t, http.StatusBadRequest, status, "an unknown member is refused")
 
-	// DEC-063: a preparation of a change names its base, which reaches
-	// Control in the subject and is part of the intake's digest.
+	// DEC-063, DEC-064: a preparation of a change names its base, which
+	// reaches Control as the subject's refinement base, is part of the
+	// intake's digest and is stated back as the view's refinementBase.
 	prepare := func(commandID, base string) (int, map[string]any) {
 		status, out, _ := do(t, ts, "POST", "/api/v1/preparations", tokenA, `{"commandId":"`+commandID+`","prompt":{"transferId":"xfer_prompt","digest":"`+digest+`"}`+base+`}`)
 		return status, out
@@ -53,11 +54,28 @@ func TestPreparationEndpoints(t *testing.T) {
 	control.mu.Lock()
 	sent := append([]application.OperationSubject(nil), control.subjects[len(control.subjects)-2:]...)
 	control.mu.Unlock()
-	require.Empty(t, sent[0].SourceOperationID, "a preparation of a new component names no base")
-	require.Empty(t, sent[0].SourceRevision)
-	require.Equal(t, "op_base", sent[1].SourceOperationID)
-	require.Equal(t, "4", sent[1].SourceRevision)
+	require.Empty(t, sent[0].BaseOperationID, "a preparation of a new component names no base")
+	require.Equal(t, "op_base", sent[1].BaseOperationID)
+	require.Equal(t, "4", sent[1].BaseRevision)
+	require.Empty(t, sent[1].SourceOperationID, "a base is not a release's source operation")
+	require.Empty(t, sent[1].SourceRevision)
 	require.NotEqual(t, sent[0].SubjectDigest, sent[1].SubjectDigest, "the base is part of the intake")
+	require.NotContains(t, plain["subject"], "refinementBase")
+	require.Equal(t, map[string]any{"sourceOperationId": "op_base", "sourceRevision": "4"}, based["subject"].(map[string]any)["refinementBase"])
+
+	// The refinement names the same base the same way.
+	status, refined, _ := do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"r1","kind":"refinement","subject":{"profileId":"refinement-v1","subjectDigest":"`+digest+`","briefId":"brf_1","refinementBase":{"sourceOperationId":"op_base","sourceRevision":"4"}}}`)
+	require.Equal(t, http.StatusAccepted, status, refined)
+	require.Equal(t, "refinement", refined["kind"])
+	require.Equal(t, map[string]any{"sourceOperationId": "op_base", "sourceRevision": "4"}, refined["subject"].(map[string]any)["refinementBase"])
+	control.mu.Lock()
+	last := control.subjects[len(control.subjects)-1]
+	control.mu.Unlock()
+	require.Equal(t, "op_base", last.BaseOperationID)
+	require.Equal(t, "4", last.BaseRevision)
+	require.Empty(t, last.SourceOperationID)
+	status, _, _ = do(t, ts, "POST", "/api/v1/operations", tokenA, `{"commandId":"r2","kind":"refinement","subject":{"profileId":"refinement-v1","subjectDigest":"`+digest+`","briefId":"brf_1","refinementBase":{"sourceOperationId":"op_base"}}}`)
+	require.Equal(t, http.StatusBadRequest, status, "a base without its revision is refused")
 	for name, base := range map[string]string{
 		"no revision":       `,"refinementBase":{"sourceOperationId":"op_base"}`,
 		"no operation":      `,"refinementBase":{"sourceRevision":"4"}`,

@@ -74,18 +74,22 @@ type OperationView struct {
 	// SourceOperationID and PackageVersion bind a release (P21).
 	SourceOperationID string
 	PackageVersion    string
-	Lifecycle         string
-	Phase             string
-	Control           string
-	Cleanup           string
-	Finance           string
-	Revision          string
-	CoveredEventSeq   string
-	ExecutionEpoch    string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	Deadline          time.Time
-	FailureCode       string
+	// BaseOperationID and BaseRevision are the refinement base of a
+	// refinement or of the preparation of its change (DEC-064).
+	BaseOperationID string
+	BaseRevision    string
+	Lifecycle       string
+	Phase           string
+	Control         string
+	Cleanup         string
+	Finance         string
+	Revision        string
+	CoveredEventSeq string
+	ExecutionEpoch  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Deadline        time.Time
+	FailureCode     string
 	// ActiveDeadline is set once by the first execution permit of a
 	// generation; nil until then.
 	ActiveDeadline *time.Time
@@ -296,11 +300,14 @@ type OperationSubject struct {
 	SourceRevision string
 	SourceHandle   string
 	// SourceOperationID and PackageVersion bind a release (P21); Control
-	// binds the released source artifact itself. SourceOperationID and
-	// SourceRevision also name the base of a refinement and of the
-	// preparation that analyzes it (DEC-062, DEC-063).
+	// binds the released source artifact itself.
 	SourceOperationID string
 	PackageVersion    string
+	// BaseOperationID and BaseRevision name a refinement's base (DEC-062,
+	// DEC-064): the public refinementBase, stated apart from a release's
+	// source. Control binds the base's source artifact itself.
+	BaseOperationID string
+	BaseRevision    string
 }
 
 // ResetRequired tells the SSE handler to send a reset frame.

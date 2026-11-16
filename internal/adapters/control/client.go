@@ -102,6 +102,7 @@ func toView(v *controlv1.OperationView) application.OperationView {
 		Kind: enumWord(v.GetKind().String(), "OPERATION_KIND_"), ProfileID: v.GetSubject().GetProfileId(), SubjectDigest: v.GetSubject().GetSubjectDigest(),
 		BriefID: v.GetSubject().GetBriefId(), SourceRevision: v.GetSubject().GetSourceRevision(), SourceHandle: v.GetSubject().GetSourceHandle(),
 		SourceOperationID: v.GetSubject().GetSourceOperationId(), PackageVersion: v.GetSubject().GetPackageVersion(),
+		BaseOperationID: v.GetSubject().GetRefinementBase().GetSourceOperationId(), BaseRevision: v.GetSubject().GetRefinementBase().GetSourceRevision(),
 		Lifecycle: enumWord(v.GetLifecycle().String(), "LIFECYCLE_"), Phase: v.GetPhase(), Control: enumWord(v.GetControl().String(), "CONTROL_STATE_"),
 		Cleanup: enumWord(v.GetCleanup().String(), "CLEANUP_STATE_"), Finance: enumWord(v.GetFinance().String(), "FINANCE_STATE_"),
 		Revision: v.GetRevision(), CoveredEventSeq: v.GetCoveredEventSeq(), ExecutionEpoch: v.GetExecutionEpoch(),
@@ -133,11 +134,9 @@ func (c *Client) CreatePreparation(ctx context.Context, cmd application.CommandI
 		prep.AssetReferences = append(prep.AssetReferences, &controlv1.SourceReference{SourceId: r.SourceID, Revision: r.Revision})
 	}
 	subject := &controlv1.OperationSubject{ProfileId: profileID, SubjectDigest: subjectDigest}
-	if intake.BaseOperationID != "" {
-		// DEC-063: the preparation's subject names its base, as a
-		// refinement's and a release's name their source.
-		subject.SourceOperationId, subject.SourceRevision = &intake.BaseOperationID, &intake.BaseRevision
-	}
+	// DEC-063, DEC-064: the preparation's subject names its base the way
+	// the refinement's does.
+	subject.RefinementBase = refinementBase(intake.BaseOperationID, intake.BaseRevision)
 	resp, err := c.ops.CreateOperation(ctx, &controlv1.CreateOperationRequest{
 		Command: command(cmd), Scope: scope(p), Kind: controlv1.OperationKind_OPERATION_KIND_PREPARATION,
 		Subject: subject, Preparation: prep,
@@ -264,6 +263,15 @@ func MapError(err error, service string) error {
 	}
 }
 
+// refinementBase states a refinement base in Control's subject; nil when
+// none is named.
+func refinementBase(operationID, revision string) *controlv1.RefinementBase {
+	if operationID == "" && revision == "" {
+		return nil
+	}
+	return &controlv1.RefinementBase{SourceOperationId: operationID, SourceRevision: revision}
+}
+
 func (c *Client) CreateOperation(ctx context.Context, cmd application.CommandIdentity, p application.Principal, kind string, s application.OperationSubject) (application.OperationView, error) {
 	subject := &controlv1.OperationSubject{ProfileId: s.ProfileID, SubjectDigest: s.SubjectDigest}
 	if s.BriefID != "" {
@@ -281,6 +289,7 @@ func (c *Client) CreateOperation(ctx context.Context, cmd application.CommandIde
 	if s.PackageVersion != "" {
 		subject.PackageVersion = &s.PackageVersion
 	}
+	subject.RefinementBase = refinementBase(s.BaseOperationID, s.BaseRevision)
 	resp, err := c.ops.CreateOperation(ctx, &controlv1.CreateOperationRequest{Command: command(cmd), Scope: scope(p), Kind: kinds[kind], Subject: subject})
 	if err != nil {
 		return application.OperationView{}, mapErr(err)
