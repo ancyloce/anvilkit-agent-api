@@ -289,6 +289,17 @@ type Control interface {
 	GetRecovery(ctx context.Context, p Principal, runID string) (agentapi.RecoveryRun, error)
 	ListRecoveryFindings(ctx context.Context, p Principal, runID string, params agentapi.ListRecoveryFindingsParams) (agentapi.FindingPage, error)
 	DisposeObligation(ctx context.Context, cmd CommandIdentity, p Principal, runID string, req agentapi.DisposeObligationRequest) (d agentapi.Disposition, existing bool, err error)
+	// CreateBudgetPool to AdjustCreditPool are the platform operator's pool
+	// routes (DEC-066) over Control's BudgetPoolService. Control decides on
+	// the principal's verified roles: platform_operator creates and adjusts,
+	// an operator also reads its own tenant's pools; existing reports a pool
+	// Control already held with the same terms.
+	CreateBudgetPool(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.CreateBudgetPoolRequest) (pool agentapi.BudgetPool, existing bool, err error)
+	FindBudgetPool(ctx context.Context, p Principal, params agentapi.FindBudgetPoolParams) (agentapi.BudgetPool, error)
+	AdjustBudgetPool(ctx context.Context, cmd CommandIdentity, p Principal, poolID string, req agentapi.AdjustBudgetPoolRequest) (agentapi.BudgetPool, error)
+	CreateCreditPool(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.CreateCreditPoolRequest) (pool agentapi.CreditPool, existing bool, err error)
+	FindCreditPool(ctx context.Context, p Principal, params agentapi.FindCreditPoolParams) (agentapi.CreditPool, error)
+	AdjustCreditPool(ctx context.Context, cmd CommandIdentity, p Principal, creditPoolID string, req agentapi.AdjustCreditPoolRequest) (agentapi.CreditPool, error)
 }
 
 // OperationSubject is what API-02 binds an operation to; SourceHandle is
