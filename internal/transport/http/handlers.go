@@ -570,3 +570,64 @@ func (h *strictHandlers) DisposeObligation(ctx context.Context, req agentapi.Dis
 	}
 	return agentapi.DisposeObligation201JSONResponse(d), nil
 }
+
+// CreateBudgetPool to AdjustCreditPool are the platform operator's pool
+// routes (DEC-066). Control decides the roles; a pool Control already held
+// with the same terms answers 200, a new one 201.
+func (h *strictHandlers) CreateBudgetPool(ctx context.Context, req agentapi.CreateBudgetPoolRequestObject) (agentapi.CreateBudgetPoolResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	pool, existing, err := h.control.CreateBudgetPool(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if existing {
+		return agentapi.CreateBudgetPool200JSONResponse(pool), nil
+	}
+	return agentapi.CreateBudgetPool201JSONResponse(pool), nil
+}
+
+func (h *strictHandlers) FindBudgetPool(ctx context.Context, req agentapi.FindBudgetPoolRequestObject) (agentapi.FindBudgetPoolResponseObject, error) {
+	pool, err := h.control.FindBudgetPool(ctx, principal(ginContext(ctx)), req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.FindBudgetPool200JSONResponse(pool), nil
+}
+
+func (h *strictHandlers) AdjustBudgetPool(ctx context.Context, req agentapi.AdjustBudgetPoolRequestObject) (agentapi.AdjustBudgetPoolResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	pool, err := h.control.AdjustBudgetPool(ctx, cmd, p, req.PoolId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.AdjustBudgetPool200JSONResponse(pool), nil
+}
+
+func (h *strictHandlers) CreateCreditPool(ctx context.Context, req agentapi.CreateCreditPoolRequestObject) (agentapi.CreateCreditPoolResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	pool, existing, err := h.control.CreateCreditPool(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if existing {
+		return agentapi.CreateCreditPool200JSONResponse(pool), nil
+	}
+	return agentapi.CreateCreditPool201JSONResponse(pool), nil
+}
+
+func (h *strictHandlers) FindCreditPool(ctx context.Context, req agentapi.FindCreditPoolRequestObject) (agentapi.FindCreditPoolResponseObject, error) {
+	pool, err := h.control.FindCreditPool(ctx, principal(ginContext(ctx)), req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.FindCreditPool200JSONResponse(pool), nil
+}
+
+func (h *strictHandlers) AdjustCreditPool(ctx context.Context, req agentapi.AdjustCreditPoolRequestObject) (agentapi.AdjustCreditPoolResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	pool, err := h.control.AdjustCreditPool(ctx, cmd, p, req.CreditPoolId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.AdjustCreditPool200JSONResponse(pool), nil
+}

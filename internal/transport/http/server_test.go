@@ -73,6 +73,7 @@ type fakeControl struct {
 	subjects  []application.OperationSubject
 	artifacts map[string]application.PreviewBytes
 	rec       *fakeRecovery
+	finance   *fakeFinance
 }
 
 func newFake() *fakeControl {
