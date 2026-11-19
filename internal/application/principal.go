@@ -300,6 +300,17 @@ type Control interface {
 	CreateCreditPool(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.CreateCreditPoolRequest) (pool agentapi.CreditPool, existing bool, err error)
 	FindCreditPool(ctx context.Context, p Principal, params agentapi.FindCreditPoolParams) (agentapi.CreditPool, error)
 	AdjustCreditPool(ctx context.Context, cmd CommandIdentity, p Principal, creditPoolID string, req agentapi.AdjustCreditPoolRequest) (agentapi.CreditPool, error)
+	// CreateConversation to ListMessages are the principal's personal
+	// conversations (DEC-067) over Control's ConversationService. Control
+	// decides ownership on the principal's tenant, project and actor and
+	// answers NOT_FOUND for anyone else's conversation; a retried command
+	// answers what Control recorded for it.
+	CreateConversation(ctx context.Context, cmd CommandIdentity, p Principal, req agentapi.CreateConversationRequest) (agentapi.Conversation, error)
+	GetConversation(ctx context.Context, p Principal, conversationID string) (agentapi.Conversation, error)
+	ListConversations(ctx context.Context, p Principal, params agentapi.ListConversationsParams) (agentapi.ConversationPage, error)
+	UpdateConversation(ctx context.Context, cmd CommandIdentity, p Principal, conversationID string, req agentapi.UpdateConversationRequest) (agentapi.Conversation, error)
+	AppendMessage(ctx context.Context, cmd CommandIdentity, p Principal, conversationID string, req agentapi.AppendMessageRequest) (agentapi.MessageReceipt, error)
+	ListMessages(ctx context.Context, p Principal, conversationID string, params agentapi.ListMessagesParams) (agentapi.MessagePage, error)
 }
 
 // OperationSubject is what API-02 binds an operation to; SourceHandle is
