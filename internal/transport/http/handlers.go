@@ -631,3 +631,58 @@ func (h *strictHandlers) AdjustCreditPool(ctx context.Context, req agentapi.Adju
 	}
 	return agentapi.AdjustCreditPool200JSONResponse(pool), nil
 }
+
+// CreateConversation to ListMessages are the principal's personal
+// conversations (DEC-067). Control decides ownership; the API derives the
+// command from the verified principal and the canonical body, and a retried
+// command answers with the same status as its first acceptance.
+func (h *strictHandlers) CreateConversation(ctx context.Context, req agentapi.CreateConversationRequestObject) (agentapi.CreateConversationResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	c, err := h.control.CreateConversation(ctx, cmd, p, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.CreateConversation201JSONResponse(c), nil
+}
+
+func (h *strictHandlers) ListConversations(ctx context.Context, req agentapi.ListConversationsRequestObject) (agentapi.ListConversationsResponseObject, error) {
+	page, err := h.control.ListConversations(ctx, principal(ginContext(ctx)), req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListConversations200JSONResponse(page), nil
+}
+
+func (h *strictHandlers) GetConversation(ctx context.Context, req agentapi.GetConversationRequestObject) (agentapi.GetConversationResponseObject, error) {
+	c, err := h.control.GetConversation(ctx, principal(ginContext(ctx)), req.ConversationId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetConversation200JSONResponse(c), nil
+}
+
+func (h *strictHandlers) UpdateConversation(ctx context.Context, req agentapi.UpdateConversationRequestObject) (agentapi.UpdateConversationResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	c, err := h.control.UpdateConversation(ctx, cmd, p, req.ConversationId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.UpdateConversation200JSONResponse(c), nil
+}
+
+func (h *strictHandlers) AppendMessage(ctx context.Context, req agentapi.AppendMessageRequestObject) (agentapi.AppendMessageResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	r, err := h.control.AppendMessage(ctx, cmd, p, req.ConversationId, *req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.AppendMessage201JSONResponse(r), nil
+}
+
+func (h *strictHandlers) ListMessages(ctx context.Context, req agentapi.ListMessagesRequestObject) (agentapi.ListMessagesResponseObject, error) {
+	page, err := h.control.ListMessages(ctx, principal(ginContext(ctx)), req.ConversationId, req.Params)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.ListMessages200JSONResponse(page), nil
+}

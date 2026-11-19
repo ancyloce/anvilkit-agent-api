@@ -74,6 +74,7 @@ type fakeControl struct {
 	artifacts map[string]application.PreviewBytes
 	rec       *fakeRecovery
 	finance   *fakeFinance
+	conv      *fakeConversations
 }
 
 func newFake() *fakeControl {
