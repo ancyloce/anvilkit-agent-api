@@ -311,6 +311,12 @@ type Control interface {
 	UpdateConversation(ctx context.Context, cmd CommandIdentity, p Principal, conversationID string, req agentapi.UpdateConversationRequest) (agentapi.Conversation, error)
 	AppendMessage(ctx context.Context, cmd CommandIdentity, p Principal, conversationID string, req agentapi.AppendMessageRequest) (agentapi.MessageReceipt, error)
 	ListMessages(ctx context.Context, p Principal, conversationID string, params agentapi.ListMessagesParams) (agentapi.MessagePage, error)
+	// GetTurn and StopTurn are a conversation's reply turns (DEC-068): the
+	// turn's view, and the stop of its reply, which Control records against
+	// the turn's chat_turn operation at its current revision; a stop of a
+	// finished turn answers the turn as it ended.
+	GetTurn(ctx context.Context, p Principal, conversationID, turnID string) (agentapi.Turn, error)
+	StopTurn(ctx context.Context, cmd CommandIdentity, p Principal, conversationID, turnID string) (agentapi.Turn, error)
 }
 
 // OperationSubject is what API-02 binds an operation to; SourceHandle is

@@ -686,3 +686,23 @@ func (h *strictHandlers) ListMessages(ctx context.Context, req agentapi.ListMess
 	}
 	return agentapi.ListMessages200JSONResponse(page), nil
 }
+
+// GetTurn and StopTurn are a conversation's reply turns (DEC-068). A stop is
+// accepted with 202 and answers the turn as it stands: the reply may still
+// record its outcome, or the turn may already have ended.
+func (h *strictHandlers) GetTurn(ctx context.Context, req agentapi.GetTurnRequestObject) (agentapi.GetTurnResponseObject, error) {
+	t, err := h.control.GetTurn(ctx, principal(ginContext(ctx)), req.ConversationId, req.TurnId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetTurn200JSONResponse(t), nil
+}
+
+func (h *strictHandlers) StopTurn(ctx context.Context, req agentapi.StopTurnRequestObject) (agentapi.StopTurnResponseObject, error) {
+	cmd, p := identity(ctx, req.Body.CommandId)
+	t, err := h.control.StopTurn(ctx, cmd, p, req.ConversationId, req.TurnId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.StopTurn202JSONResponse(t), nil
+}

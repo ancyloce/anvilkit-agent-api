@@ -59,11 +59,17 @@ type fakeConversations struct {
 	commands map[string]conversationCommand // tenant/commandId
 	calls    int
 	scopes   []application.Principal
+	// replies opens a turn per message (DEC-068); open is each
+	// conversation's unfinished turn, stops the stop commands recorded.
+	replies bool
+	turns   map[string]*agentapi.Turn
+	open    map[string]string
+	stops   []application.CommandIdentity
 }
 
 func (f *fakeControl) conversations() *fakeConversations {
 	if f.conv == nil {
-		f.conv = &fakeConversations{convs: map[string]*conversationRecord{}, commands: map[string]conversationCommand{}}
+		f.conv = &fakeConversations{convs: map[string]*conversationRecord{}, commands: map[string]conversationCommand{}, turns: map[string]*agentapi.Turn{}, open: map[string]string{}}
 	}
 	return f.conv
 }
@@ -183,6 +189,10 @@ func (f *fakeControl) AppendMessage(_ context.Context, cmd application.CommandId
 	if prior, ok, err := fc.replay(cmd); err != nil || ok {
 		return prior.receipt, err
 	}
+	if _, busy := fc.open[id]; busy {
+		// Control's refusal, as MapError carries it (maperror_test.go).
+		return agentapi.MessageReceipt{}, &application.ControlError{Code: "CAPACITY_EXHAUSTED", Message: "TURN_BUSY: conversation " + id + " has an unfinished turn", Retryable: true}
+	}
 	switch {
 	case req.ExpectedRevision != r.conv.Revision:
 		return agentapi.MessageReceipt{}, &application.ControlError{Code: "REVISION_CONFLICT", Message: "conversation at revision " + r.conv.Revision}
@@ -196,6 +206,13 @@ func (f *fakeControl) AppendMessage(_ context.Context, cmd application.CommandId
 		Role: "user", State: "completed", Content: req.Content, ContentDigest: digest, CreatedAt: r.conv.CreatedAt}
 	r.messages = append(r.messages, m)
 	receipt := agentapi.MessageReceipt{ConversationId: id, MessageId: m.MessageId, MessageSeq: m.MessageSeq, ConversationRevision: r.conv.Revision, CreatedAt: m.CreatedAt}
+	if fc.replies {
+		turnID, opID := "trn_"+m.MessageId, "op_"+m.MessageId
+		fc.turns[turnID] = &agentapi.Turn{TurnId: turnID, ConversationId: id, InputMessageId: m.MessageId, OperationId: opID, State: agentapi.TurnStateQueued,
+			ContentStatus: agentapi.ContentStatusUnknown, SenderStatus: agentapi.SenderStatusNotStarted, Finance: "funded", CreatedAt: m.CreatedAt, UpdatedAt: m.CreatedAt}
+		fc.open[id] = turnID
+		receipt.TurnId, receipt.OperationId = &turnID, &opID
+	}
 	fc.commands[cmd.TenantID+"/"+cmd.CommandID] = conversationCommand{cmd: cmd, convID: id, receipt: receipt}
 	return receipt, nil
 }
@@ -208,6 +225,38 @@ func (f *fakeControl) ListMessages(_ context.Context, p application.Principal, i
 		return agentapi.MessagePage{}, err
 	}
 	return agentapi.MessagePage{Messages: append([]agentapi.Message{}, r.messages...)}, nil
+}
+
+func (f *fakeControl) GetTurn(_ context.Context, p application.Principal, convID, turnID string) (agentapi.Turn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fc := f.conversations()
+	if _, err := fc.owned(p, convID); err != nil {
+		return agentapi.Turn{}, err
+	}
+	t, ok := fc.turns[turnID]
+	if !ok || t.ConversationId != convID {
+		return agentapi.Turn{}, conversationNotFound
+	}
+	return *t, nil
+}
+
+func (f *fakeControl) StopTurn(_ context.Context, cmd application.CommandIdentity, p application.Principal, convID, turnID string) (agentapi.Turn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fc := f.conversations()
+	if _, err := fc.owned(p, convID); err != nil {
+		return agentapi.Turn{}, err
+	}
+	t, ok := fc.turns[turnID]
+	if !ok || t.ConversationId != convID {
+		return agentapi.Turn{}, conversationNotFound
+	}
+	fc.stops = append(fc.stops, cmd)
+	if t.State == agentapi.TurnStateQueued || t.State == agentapi.TurnStateRunning {
+		t.State = agentapi.TurnStateCancelPending
+	}
+	return *t, nil
 }
 
 func bump(s string) string {
@@ -331,4 +380,78 @@ func TestConversationRoutes(t *testing.T) {
 	for _, p := range fake.conversations().scopes {
 		require.NotEmpty(t, p.ActorID, "every call carries the verified principal")
 	}
+}
+
+// TestConversationTurnRoutes (DEC-068): where replies are enabled a message's
+// receipt names its turn and operation; a message while that turn is
+// unfinished is a retryable 429 CAPACITY_EXHAUSTED whose message begins
+// TURN_BUSY: and that names when to come back; the turn is the owner's to
+// read and to stop, a stop is accepted with 202 under the command the API
+// derives from the verified principal and the canonical body, and its body is
+// strict.
+func TestConversationTurnRoutes(t *testing.T) {
+	ts, fake := conversationServer(t)
+	fake.conversations().replies = true
+	code, out, _ := do(t, ts, http.MethodPost, "/api/v1/conversations", tokenAlice, `{"commandId":"conv-t"}`)
+	require.Equal(t, http.StatusCreated, code)
+	convID := out["conversationId"].(string)
+
+	code, out, _ = do(t, ts, http.MethodPost, "/api/v1/conversations/"+convID+"/messages", tokenAlice, `{"commandId":"msg-t1","expectedRevision":"1","content":{"type":"text","text":"Make it black"}}`)
+	require.Equal(t, http.StatusCreated, code)
+	assertFrameSchema(t, "MessageReceipt", mustJSON(t, out))
+	turnID, opID := out["turnId"].(string), out["operationId"].(string)
+	require.NotEmpty(t, turnID)
+	require.NotEmpty(t, opID)
+
+	code, out, header := do(t, ts, http.MethodPost, "/api/v1/conversations/"+convID+"/messages", tokenAlice, `{"commandId":"msg-t2","expectedRevision":"2","content":{"type":"text","text":"And a search box"}}`)
+	require.Equal(t, http.StatusTooManyRequests, code, "the previous turn is unfinished")
+	require.Equal(t, "CAPACITY_EXHAUSTED", errorCode(out))
+	envelope := out["error"].(map[string]any)
+	require.True(t, strings.HasPrefix(envelope["message"].(string), "TURN_BUSY:"), envelope["message"])
+	require.Equal(t, true, envelope["retryable"])
+	require.Equal(t, "5", header.Get("Retry-After"))
+
+	path := "/api/v1/conversations/" + convID + "/turns/" + turnID
+	code, out, _ = do(t, ts, http.MethodGet, path, tokenAlice, "")
+	require.Equal(t, http.StatusOK, code)
+	assertFrameSchema(t, "Turn", mustJSON(t, out))
+	require.Equal(t, "queued", out["state"])
+	require.Equal(t, opID, out["operationId"])
+	require.NotContains(t, out, "text", "a turn carries no text")
+
+	code, out, _ = do(t, ts, http.MethodPost, path+"/cancellations", tokenAlice, `{"commandId":"stop-1"}`)
+	require.Equal(t, http.StatusAccepted, code)
+	assertFrameSchema(t, "Turn", mustJSON(t, out))
+	require.Equal(t, "cancel_pending", out["state"])
+	stop := fake.conversations().stops[0]
+	require.Equal(t, application.CommandIdentity{TenantID: "tenant_a", CommandID: "stop-1", ActorID: "user_alice", RequestDigest: stop.RequestDigest}, stop)
+	require.True(t, strings.HasPrefix(stop.RequestDigest, "sha256:"))
+
+	t.Run("strict requests reach no owner", func(t *testing.T) {
+		before := len(fake.conversations().stops)
+		for name, body := range map[string]string{
+			"no command":       `{}`,
+			"another member":   `{"commandId":"stop-2","reason":"too slow"}`,
+			"a numeric id":     `{"commandId":7}`,
+			"a duplicate":      `{"commandId":"stop-2","commandId":"stop-3"}`,
+			"a revision named": `{"commandId":"stop-2","expectedRevision":"3"}`,
+		} {
+			code, out, _ := do(t, ts, http.MethodPost, path+"/cancellations", tokenAlice, body)
+			require.Equal(t, http.StatusBadRequest, code, name)
+			require.Equal(t, "INVALID_ARGUMENT", errorCode(out), name)
+		}
+		require.Equal(t, before, len(fake.conversations().stops), "Control is never asked")
+	})
+
+	t.Run("another owner or tenant gets not found", func(t *testing.T) {
+		for name, token := range map[string]string{"another user of the project": tokenBob, "the same actor id in another tenant": tokenCarol} {
+			code, out, _ := do(t, ts, http.MethodGet, path, token, "")
+			require.Equal(t, http.StatusNotFound, code, name)
+			require.Equal(t, "NOT_FOUND", errorCode(out), name)
+			code, _, _ = do(t, ts, http.MethodPost, path+"/cancellations", token, `{"commandId":"intrude-stop"}`)
+			require.Equal(t, http.StatusNotFound, code, name)
+		}
+		code, _, _ := do(t, ts, http.MethodGet, "/api/v1/conversations/"+convID+"/turns/trn_unknown", tokenAlice, "")
+		require.Equal(t, http.StatusNotFound, code, "a turn of no message")
+	})
 }
