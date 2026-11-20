@@ -49,6 +49,17 @@ func TestBudgetExhaustedIsNeverACapacityRefusal(t *testing.T) {
 	}
 }
 
+// TestTurnBusyIsARetryableCapacityRefusal (DEC-068): Control's refusal of a
+// message while the conversation's previous turn is unfinished reaches the
+// client as CAPACITY_EXHAUSTED, retryable, its message kept so it begins
+// TURN_BUSY: as agent.yaml states.
+func TestTurnBusyIsARetryableCapacityRefusal(t *testing.T) {
+	var ce *application.ControlError
+	msg := "TURN_BUSY: conversation cnv_1 has an unfinished turn"
+	require.True(t, errors.As(control.MapError(status.Error(codes.ResourceExhausted, msg), "control"), &ce))
+	require.Equal(t, application.ControlError{Code: "CAPACITY_EXHAUSTED", Message: msg, Retryable: true}, *ce)
+}
+
 // TestEffectUncertainIsNeverRetryable (RB-A24): the EFFECT_UNCERTAIN code is
 // non-retryable under every gRPC code that may carry it, today's (UNAVAILABLE,
 // FAILED_PRECONDITION) and any Control may switch to.

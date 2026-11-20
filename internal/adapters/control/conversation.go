@@ -37,6 +37,20 @@ func toMessage(m *controlv1.Message) agentapi.Message {
 	}
 }
 
+// toTurn is the public turn view (DEC-068): its state and the reply's content
+// and sender status, the operation's finance, never text.
+func toTurn(t *controlv1.Turn) agentapi.Turn {
+	return agentapi.Turn{
+		TurnId: t.GetTurnId(), ConversationId: t.GetConversationId(), InputMessageId: t.GetInputMessageId(), AssistantMessageId: t.AssistantMessageId,
+		OperationId:   t.GetOperationId(),
+		State:         agentapi.TurnState(enumWord(t.GetState().String(), "TURN_STATE_")),
+		ContentStatus: agentapi.ContentStatus(enumWord(t.GetContentStatus().String(), "CONTENT_STATUS_")),
+		SenderStatus:  agentapi.SenderStatus(enumWord(t.GetSenderStatus().String(), "SENDER_STATUS_")),
+		Finance:       agentapi.FinanceState(enumWord(t.GetFinance().String(), "FINANCE_STATE_")),
+		FailureCode:   t.FailureCode, CreatedAt: t.GetCreatedAt().AsTime().UTC(), UpdatedAt: t.GetUpdatedAt().AsTime().UTC(),
+	}
+}
+
 func limitOf(l *agentapi.HistoryLimit) int32 {
 	if l == nil {
 		return 0
@@ -117,4 +131,20 @@ func (c *Client) ListMessages(ctx context.Context, p application.Principal, conv
 		page.Messages = append(page.Messages, toMessage(m))
 	}
 	return page, nil
+}
+
+func (c *Client) GetTurn(ctx context.Context, p application.Principal, conversationID, turnID string) (agentapi.Turn, error) {
+	resp, err := controlv1.NewConversationServiceClient(c.conn).GetTurn(ctx, &controlv1.GetTurnRequest{Scope: scope(p), ConversationId: conversationID, TurnId: turnID})
+	if err != nil {
+		return agentapi.Turn{}, mapErr(err)
+	}
+	return toTurn(resp.GetTurn()), nil
+}
+
+func (c *Client) StopTurn(ctx context.Context, cmd application.CommandIdentity, p application.Principal, conversationID, turnID string) (agentapi.Turn, error) {
+	resp, err := controlv1.NewConversationServiceClient(c.conn).StopTurn(ctx, &controlv1.StopTurnRequest{Command: command(cmd), Scope: scope(p), ConversationId: conversationID, TurnId: turnID})
+	if err != nil {
+		return agentapi.Turn{}, mapErr(err)
+	}
+	return toTurn(resp.GetTurn()), nil
 }
