@@ -698,6 +698,16 @@ func (h *strictHandlers) GetTurn(ctx context.Context, req agentapi.GetTurnReques
 	return agentapi.GetTurn200JSONResponse(t), nil
 }
 
+// GetMessage is D4a's read of one message (DEC-070): a streaming reply shows
+// its committed chunks.
+func (h *strictHandlers) GetMessage(ctx context.Context, req agentapi.GetMessageRequestObject) (agentapi.GetMessageResponseObject, error) {
+	m, err := h.control.GetMessage(ctx, principal(ginContext(ctx)), req.ConversationId, req.MessageId)
+	if err != nil {
+		return nil, err
+	}
+	return agentapi.GetMessage200JSONResponse(m), nil
+}
+
 func (h *strictHandlers) StopTurn(ctx context.Context, req agentapi.StopTurnRequestObject) (agentapi.StopTurnResponseObject, error) {
 	cmd, p := identity(ctx, req.Body.CommandId)
 	t, err := h.control.StopTurn(ctx, cmd, p, req.ConversationId, req.TurnId)

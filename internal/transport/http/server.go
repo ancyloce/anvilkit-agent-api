@@ -166,7 +166,10 @@ func NewServer(opts Options, verifier application.Verifier, control application.
 	// SSE is excluded from the generated strict server because it streams;
 	// its cursor parameters are bound with Gin's ShouldBind* against the
 	// same canonical-sequence rule and its frames come from gin-contrib/sse.
-	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream, newStreamLimiter(opts.Stream.MaxStreams, opts.Stream.MaxStreamsPerPrincipal), draining))
+	// One limiter bounds the operation and conversation streams together (P1.4, D4a).
+	streams := newStreamLimiter(opts.Stream.MaxStreams, opts.Stream.MaxStreamsPerPrincipal)
+	api.GET("/operations/:operationId/events", streamEvents(control, opts.Stream, streams, draining))
+	api.GET("/conversations/:conversationId/events", streamConversationEvents(control, opts.Stream, streams, draining))
 
 	validator, err := requestValidator(spec)
 	if err != nil {

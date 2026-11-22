@@ -75,6 +75,9 @@ type fakeControl struct {
 	rec       *fakeRecovery
 	finance   *fakeFinance
 	conv      *fakeConversations
+	// convStream scripts Control's conversation stream (D4a); nil admits it
+	// and waits for the client.
+	convStream func(ctx context.Context, id, after string, admitted func(), emit func(agentapi.ConversationEventFrame) error) error
 }
 
 func newFake() *fakeControl {
