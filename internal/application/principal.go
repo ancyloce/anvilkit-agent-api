@@ -317,6 +317,16 @@ type Control interface {
 	// finished turn answers the turn as it ended.
 	GetTurn(ctx context.Context, p Principal, conversationID, turnID string) (agentapi.Turn, error)
 	StopTurn(ctx context.Context, cmd CommandIdentity, p Principal, conversationID, turnID string) (agentapi.Turn, error)
+	// GetMessage and StreamConversationEvents are D4a's reads (DEC-070): one
+	// message of the principal's conversation (a streaming reply assembled
+	// from its committed chunks), and the conversation's durable events after
+	// the cursor as they commit. StreamConversationEvents calls admitted once
+	// Control accepted the stream, then emit for every event; a cursor that
+	// cannot be honored returns *ResetRequired with the covered sequence. A
+	// conversation has no terminal event: the stream runs until ctx ends or
+	// Control ends it.
+	GetMessage(ctx context.Context, p Principal, conversationID, messageID string) (agentapi.Message, error)
+	StreamConversationEvents(ctx context.Context, p Principal, conversationID, afterSeq string, admitted func(), emit func(agentapi.ConversationEventFrame) error) error
 }
 
 // OperationSubject is what API-02 binds an operation to; SourceHandle is
